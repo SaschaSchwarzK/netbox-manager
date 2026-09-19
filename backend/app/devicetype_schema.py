@@ -115,3 +115,19 @@ COMPONENT_ENDPOINTS = {
     "device-bays": "device-bay-templates",
     "module-bays": "module-bay-templates",
 }
+
+# Attributes beyond name/label/description that matter for diffing each
+# component type, matching the fields each *Template model above actually
+# defines. Kept alongside COMPONENT_ENDPOINTS since the two need to stay in
+# sync with the schema classes above whenever a field is added there.
+COMPONENT_EXTRA_FIELDS: dict[str, list[str]] = {
+    "interfaces": ["mgmt_only", "poe_mode", "poe_type"],
+    "console-ports": [],
+    "console-server-ports": [],
+    "power-ports": ["maximum_draw", "allocated_draw"],
+    "power-outlets": ["power_port", "feed_leg"],
+    "rear-ports": ["positions"],
+    "front-ports": ["rear_port", "rear_port_position"],
+    "device-bays": [],
+    "module-bays": ["position"],
+}

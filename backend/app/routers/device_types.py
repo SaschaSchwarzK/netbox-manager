@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import uuid
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -268,6 +269,107 @@ def coverage(target_id: str, path: str = Query(...), db: Session = Depends(get_d
     return results
 
 
+@router.post("/bulk-import/scan", response_model=list[schemas.BulkImportScanEntry])
+def bulk_import_scan(target_id: str, payload: schemas.BulkImportScanRequest, db: Session = Depends(get_db)):
+    """
+    Lists every .yml/.yaml file under the source repo's device-type directory.
+    Cheap by design (one git-trees API call) — manufacturer/slug are guessed
+    from the path, not fetched from file content, so this stays fast even
+    against something the size of the full community library.
+    """
+    target = _get_target(target_id, db)
+    source_pat = payload.source_pat or crypto.decrypt(target.pat_encrypted)
+    try:
+        files = github_repo.list_device_types(source_pat, payload.source_repo, payload.source_branch, payload.source_base_dir)
+    except Exception as exc:
+        raise _github_error_to_http(exc)
+
+    entries = []
+    for f in files:
+        manufacturer, slug = github_repo.guess_manufacturer_slug(f.path)
+        entries.append(schemas.BulkImportScanEntry(path=f.path, manufacturer_guess=manufacturer, slug_guess=slug))
+    return entries
+
+
+@router.post("/bulk-import", response_model=schemas.BulkImportResult)
+def bulk_import(target_id: str, payload: schemas.BulkImportRequest, request: Request, db: Session = Depends(get_db)):
+    """
+    Fetches each selected file from the source repo, validates it against the
+    device-type schema, and lands all of them on ONE shared branch with ONE
+    pull request against the target repo — not one PR per file.
+    """
+    target = _get_target(target_id, db)
+    pat = crypto.decrypt(target.pat_encrypted)
+    source_pat = payload.source_pat or pat
+    actor = get_current_actor(request)
+
+    if not payload.paths:
+        raise HTTPException(400, "No files selected to import.")
+
+    files_to_commit = []
+    prevalidation_failures = []
+    for source_path in payload.paths:
+        try:
+            source_file = github_repo.get_file(source_pat, payload.source_repo, payload.source_branch, source_path)
+            validated = DeviceType(**source_file["payload"])
+        except Exception as exc:
+            prevalidation_failures.append(schemas.BulkImportFailure(path=source_path, error=str(exc)))
+            continue
+        dest_path = target.path_pattern.format(
+            manufacturer=validated.manufacturer, slug=validated.slug, model=validated.model
+        )
+        files_to_commit.append({"path": dest_path, "payload": validated.to_yaml_dict(), "source_path": source_path})
+
+    branch_name = f"bulk-import/{uuid.uuid4().hex[:10]}"
+    commit_message_prefix = payload.commit_message or f"Bulk import from {payload.source_repo}"
+
+    try:
+        commit_result = github_repo.bulk_create_files(
+            pat, target.repo, target.branch, branch_name,
+            [{"path": f["path"], "payload": f["payload"]} for f in files_to_commit],
+            commit_message_prefix,
+        )
+    except Exception as exc:
+        _log_action(db, repo_target_id=target_id, file_path=f"bulk-import ({len(payload.paths)} files)",
+                    target_name=target.name, status="error", detail=str(exc), actor=actor)
+        raise _github_error_to_http(exc)
+
+    all_failed = prevalidation_failures + [schemas.BulkImportFailure(**f) for f in commit_result["failed"]]
+    pr_number, pr_url = None, None
+
+    if commit_result["created"]:
+        pr_title = payload.pr_title or f"Bulk import {len(commit_result['created'])} device types from {payload.source_repo}"
+        pr_body_lines = [
+            f"Imports {len(commit_result['created'])} device type(s) from `{payload.source_repo}`@`{payload.source_branch}`:",
+            "",
+            *[f"- {p}" for p in commit_result["created"]],
+        ]
+        if commit_result["skipped"]:
+            pr_body_lines += ["", f"Skipped ({len(commit_result['skipped'])}, already exist at destination):",
+                               *[f"- {p}" for p in commit_result["skipped"]]]
+        if all_failed:
+            pr_body_lines += ["", f"Failed ({len(all_failed)}):", *[f"- {f.path}: {f.error}" for f in all_failed]]
+        pr_body = payload.pr_body or "\n".join(pr_body_lines)
+
+        try:
+            pr_result = github_repo.open_bulk_pr(
+                pat, target.repo, branch_name, target.branch, pr_title, _with_actor_trailer(pr_body, actor)
+            )
+            pr_number, pr_url = pr_result["pr_number"], pr_result["pr_url"]
+        except Exception as exc:
+            all_failed.append(schemas.BulkImportFailure(path="(PR creation)", error=str(exc)))
+
+    status = "success" if commit_result["created"] and not all_failed else ("error" if not commit_result["created"] else "success")
+    detail = f"Imported {len(commit_result['created'])}, skipped {len(commit_result['skipped'])}, failed {len(all_failed)}."
+    if pr_number:
+        detail += f" PR #{pr_number}."
+    _log_action(db, repo_target_id=target_id, file_path=f"bulk-import ({len(payload.paths)} files)",
+                target_name=target.name, status=status, detail=detail, actor=actor)
+
+    return schemas.BulkImportResult(
+        branch=branch_name, pr_number=pr_number, pr_url=pr_url,
+        imported=commit_result["created"], skipped_existing=commit_result["skipped"], failed=all_failed,
+    )
 @router.post("/file/diff-with-netbox", response_model=list[schemas.InstanceDiffResult])
 def diff_with_netbox(
     target_id: str, payload: schemas.PushToNetboxRequest, path: str = Query(...), db: Session = Depends(get_db)

@@ -5,6 +5,7 @@ import {
   customFieldsApi, CustomFieldsTemplateFile, InstanceCustomFieldsDiffResult,
 } from "../api/client";
 import ComponentGrid, { FieldDef } from "../components/ComponentGrid";
+import { ChangedItemsList } from "../components/DiffView";
 
 const CF_TYPES = [
   "text", "longtext", "integer", "decimal", "boolean", "date", "datetime",
@@ -279,11 +280,11 @@ export default function CustomFieldsPage() {
                           const d = r.diff?.[key];
                           if (!d || (!d.missing_on_instance.length && !d.extra_on_instance.length && !d.changed.length)) return null;
                           return (
-                            <div key={key} style={{ marginBottom: 4 }}>
-                              <span style={{ color: "var(--muted)" }}>{key === "custom_fields" ? "Custom fields" : "Choice sets"}: </span>
-                              {d.missing_on_instance.length > 0 && <span style={{ color: "var(--danger)" }}>missing on instance: {d.missing_on_instance.join(", ")} </span>}
-                              {d.extra_on_instance.length > 0 && <span style={{ color: "var(--warning)" }}>extra on instance (not in template): {d.extra_on_instance.join(", ")} </span>}
-                              {d.changed.length > 0 && <span style={{ color: "var(--warning)" }}>changed: {d.changed.join(", ")}</span>}
+                            <div key={key} style={{ marginBottom: 8 }}>
+                              <div style={{ color: "var(--muted)" }}>{key === "custom_fields" ? "Custom fields" : "Choice sets"}:</div>
+                              {d.missing_on_instance.length > 0 && <div style={{ marginLeft: 12, color: "var(--danger)" }}>missing on instance: {d.missing_on_instance.join(", ")}</div>}
+                              {d.extra_on_instance.length > 0 && <div style={{ marginLeft: 12, color: "var(--warning)" }}>extra on instance (not in template): {d.extra_on_instance.join(", ")}</div>}
+                              <ChangedItemsList items={d.changed} />
                             </div>
                           );
                         })}

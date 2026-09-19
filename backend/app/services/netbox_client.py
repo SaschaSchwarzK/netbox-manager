@@ -4,7 +4,7 @@ from typing import Any
 import pynetbox
 import requests
 
-from app.devicetype_schema import COMPONENT_ENDPOINTS
+from app.devicetype_schema import COMPONENT_ENDPOINTS, COMPONENT_EXTRA_FIELDS
 
 
 def get_client(base_url: str, token: str, verify_ssl: bool) -> pynetbox.api:
@@ -266,8 +266,16 @@ def get_existing_device_type(base_url: str, token: str, verify_ssl: bool, manufa
                 entry["type"] = item_type
             if getattr(item, "label", None):
                 entry["label"] = item.label
-            if key == "interfaces" and getattr(item, "mgmt_only", None) is not None:
-                entry["mgmt_only"] = item.mgmt_only
+            if getattr(item, "description", None):
+                entry["description"] = item.description
+            for extra_field in COMPONENT_EXTRA_FIELDS.get(key, []):
+                value = getattr(item, extra_field, None)
+                if extra_field in ("power_port", "rear_port") and value is not None:
+                    value = str(value)  # nested object reference -> its name, matching the source YAML
+                elif hasattr(value, "value"):
+                    value = value.value  # choice field (e.g. poe_mode, poe_type) -> raw stored string
+                if value not in (None, ""):
+                    entry[extra_field] = value
             items.append(entry)
         result[key] = items
 

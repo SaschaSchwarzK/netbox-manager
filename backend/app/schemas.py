@@ -139,10 +139,21 @@ class BaseFieldChange(BaseModel):
     netbox: Any = None
 
 
+class FieldLevelChange(BaseModel):
+    field: str
+    source: Any = None
+    existing: Any = None
+
+
+class ChangedItem(BaseModel):
+    name: str
+    field_changes: list[FieldLevelChange] = []
+
+
 class ComponentChange(BaseModel):
     added: list[str] = []
     removed: list[str] = []
-    changed: list[str] = []
+    changed: list[ChangedItem] = []
 
 
 class DiffResult(BaseModel):
@@ -220,6 +231,45 @@ class CoverageEntry(BaseModel):
     error: Optional[str] = None
 
 
+# ---------- Bulk import from a device-type library ----------
+
+class BulkImportScanRequest(BaseModel):
+    source_repo: str  # "owner/repo", e.g. netbox-community/devicetype-library
+    source_branch: str = "main"
+    source_base_dir: str = "device-types"
+    source_pat: Optional[str] = None  # falls back to this target's own PAT if omitted
+
+
+class BulkImportScanEntry(BaseModel):
+    path: str
+    manufacturer_guess: Optional[str] = None
+    slug_guess: Optional[str] = None
+
+
+class BulkImportRequest(BaseModel):
+    source_repo: str
+    source_branch: str = "main"
+    source_pat: Optional[str] = None
+    paths: list[str]  # source paths selected to import
+    commit_message: Optional[str] = None
+    pr_title: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class BulkImportFailure(BaseModel):
+    path: str
+    error: str
+
+
+class BulkImportResult(BaseModel):
+    branch: str
+    pr_number: Optional[int] = None
+    pr_url: Optional[str] = None
+    imported: list[str] = []
+    skipped_existing: list[str] = []
+    failed: list[BulkImportFailure] = []
+
+
 # ---------- Custom-fields template ----------
 
 class CustomFieldsTemplateOut(BaseModel):
@@ -254,7 +304,7 @@ class PushCustomFieldsRequest(BaseModel):
 class NamedListDiff(BaseModel):
     missing_on_instance: list[str] = []
     extra_on_instance: list[str] = []
-    changed: list[str] = []
+    changed: list[ChangedItem] = []
 
 
 class CustomFieldsDiffResult(BaseModel):

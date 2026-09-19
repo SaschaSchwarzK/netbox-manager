@@ -12,6 +12,23 @@ BASE_FIELDS = [
 ]
 
 
+def field_level_diff(source_item: dict, existing_item: dict) -> list[dict]:
+    """
+    Compares every attribute of two same-named items (a component template,
+    a custom field, a choice set) and returns exactly which fields differ,
+    not just that they differ — e.g. {"field": "maximum_draw", "source": 60,
+    "existing": 30} rather than a bare "changed" flag on the item.
+    """
+    keys = (set(source_item.keys()) | set(existing_item.keys())) - {"name"}
+    changes = []
+    for key in sorted(keys):
+        source_value = _normalize(source_item.get(key))
+        existing_value = _normalize(existing_item.get(key))
+        if source_value != existing_value:
+            changes.append({"field": key, "source": source_item.get(key), "existing": existing_item.get(key)})
+    return changes
+
+
 def diff_payloads(source: dict, existing: dict | None) -> dict:
     """
     `source` is the payload as stored in GitHub. `existing` is the same shape
@@ -35,10 +52,11 @@ def diff_payloads(source: dict, existing: dict | None) -> dict:
 
         added = sorted(set(source_items) - set(existing_items))
         removed = sorted(set(existing_items) - set(source_items))
-        changed = sorted(
-            name for name in (set(source_items) & set(existing_items))
-            if _normalize(source_items[name]) != _normalize(existing_items[name])
-        )
+        changed = []
+        for name in sorted(set(source_items) & set(existing_items)):
+            field_changes = field_level_diff(source_items[name], existing_items[name])
+            if field_changes:
+                changed.append({"name": name, "field_changes": field_changes})
 
         if added or removed or changed:
             component_changes[key] = {"added": added, "removed": removed, "changed": changed}
@@ -61,17 +79,19 @@ def diff_named_list(source_items: list[dict], existing_items: list[dict]) -> dic
     Generic "by name" diff for lists of dicts (custom fields, choice sets):
     what's in `source_items` but missing from `existing_items` (needs pushing),
     what's in `existing_items` but not in `source_items` (exists on the
-    instance but isn't in the template), and what's present in both but differs.
+    instance but isn't in the template), and — for items present in both —
+    exactly which fields differ, via field_level_diff().
     """
     source_map = {i.get("name"): i for i in source_items if i.get("name")}
     existing_map = {i.get("name"): i for i in existing_items if i.get("name")}
 
     missing_on_instance = sorted(set(source_map) - set(existing_map))
     extra_on_instance = sorted(set(existing_map) - set(source_map))
-    changed = sorted(
-        name for name in (set(source_map) & set(existing_map))
-        if _normalize(source_map[name]) != _normalize(existing_map[name])
-    )
+    changed = []
+    for name in sorted(set(source_map) & set(existing_map)):
+        field_changes = field_level_diff(source_map[name], existing_map[name])
+        if field_changes:
+            changed.append({"name": name, "field_changes": field_changes})
     return {"missing_on_instance": missing_on_instance, "extra_on_instance": extra_on_instance, "changed": changed}
 
 

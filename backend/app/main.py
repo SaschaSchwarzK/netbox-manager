@@ -7,11 +7,13 @@ from starlette.responses import JSONResponse
 from app.auth import get_current_user_optional
 from app.config import settings
 from app.database import Base, SessionLocal, engine
+from app.migrations import run_lightweight_migrations
 from app.routers import auth, device_types, drift, fleet, github, instances, search
 from app.routers import audit as audit_router
 from app.routers import custom_fields
 
 Base.metadata.create_all(bind=engine)
+run_lightweight_migrations(engine, Base)
 
 app = FastAPI(title="NetBox Manager API", version="0.1.0")
 

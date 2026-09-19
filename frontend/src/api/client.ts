@@ -212,6 +212,42 @@ export const deviceTypesApi = {
     request<CoverageEntry[]>(`/repos/${targetId}/device-types/file/coverage?path=${encodeURIComponent(path)}`),
 };
 
+// ---------- Bulk import from a device-type library ----------
+
+export interface BulkImportScanEntry {
+  path: string;
+  manufacturer_guess?: string | null;
+  slug_guess?: string | null;
+}
+
+export interface BulkImportFailure {
+  path: string;
+  error: string;
+}
+
+export interface BulkImportResult {
+  branch: string;
+  pr_number?: number | null;
+  pr_url?: string | null;
+  imported: string[];
+  skipped_existing: string[];
+  failed: BulkImportFailure[];
+}
+
+export const bulkImportApi = {
+  scan: (targetId: string, source_repo: string, source_branch: string, source_base_dir: string, source_pat?: string) =>
+    request<BulkImportScanEntry[]>(`/repos/${targetId}/device-types/bulk-import/scan`, {
+      method: "POST", body: JSON.stringify({ source_repo, source_branch, source_base_dir, source_pat }),
+    }),
+
+  import: (targetId: string, data: {
+    source_repo: string; source_branch: string; source_pat?: string; paths: string[];
+    commit_message?: string; pr_title?: string; pr_body?: string;
+  }) => request<BulkImportResult>(`/repos/${targetId}/device-types/bulk-import`, {
+    method: "POST", body: JSON.stringify(data),
+  }),
+};
+
 // ---------- Diff / drift ----------
 
 export interface BaseFieldChange {
@@ -220,10 +256,21 @@ export interface BaseFieldChange {
   netbox: any;
 }
 
+export interface FieldLevelChange {
+  field: string;
+  source: any;
+  existing: any;
+}
+
+export interface ChangedItem {
+  name: string;
+  field_changes: FieldLevelChange[];
+}
+
 export interface ComponentChange {
   added: string[];
   removed: string[];
-  changed: string[];
+  changed: ChangedItem[];
 }
 
 export interface DiffResult {
@@ -329,7 +376,7 @@ export interface CustomFieldsTemplateFile {
 export interface NamedListDiff {
   missing_on_instance: string[];
   extra_on_instance: string[];
-  changed: string[];
+  changed: ChangedItem[];
 }
 
 export interface CustomFieldsDiffResult {

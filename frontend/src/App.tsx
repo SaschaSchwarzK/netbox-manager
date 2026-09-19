@@ -3,6 +3,7 @@ import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
 import InstancesPage from "./pages/InstancesPage";
 import DeviceTypesPage from "./pages/DeviceTypesPage";
 import CustomFieldsPage from "./pages/CustomFieldsPage";
+import BulkImportPage from "./pages/BulkImportPage";
 import DeviceTypeEditorPage from "./pages/DeviceTypeEditor";
 import GithubTargetsPage from "./pages/GithubTargetsPage";
 import SearchPage from "./pages/SearchPage";
@@ -50,8 +51,8 @@ export default function App() {
             <NavLink to="/custom-fields" className={({ isActive }) => (isActive ? "active" : "")}>
               Custom Fields
             </NavLink>
-            <NavLink to="/custom-fields" className={({ isActive }) => (isActive ? "active" : "")}>
-              Custom Fields
+            <NavLink to="/bulk-import" className={({ isActive }) => (isActive ? "active" : "")}>
+              Bulk Import
             </NavLink>
             <NavLink to="/drift" className={({ isActive }) => (isActive ? "active" : "")}>
               Drift
@@ -86,6 +87,7 @@ export default function App() {
             <Route path="/device-types" element={<DeviceTypesPage />} />
             <Route path="/device-types/:targetId/edit" element={<DeviceTypeEditorPage />} />
             <Route path="/custom-fields" element={<CustomFieldsPage />} />
+            <Route path="/bulk-import" element={<BulkImportPage />} />
             <Route path="/drift" element={<DriftPage />} />
             <Route path="/audit" element={<AuditLogPage />} />
             <Route path="/instances" element={<InstancesPage />} />

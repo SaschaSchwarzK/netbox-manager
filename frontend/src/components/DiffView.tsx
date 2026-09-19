@@ -1,4 +1,4 @@
-import { DiffResult } from "../api/client";
+import { DiffResult, ChangedItem } from "../api/client";
 
 const COMPONENT_LABELS: Record<string, string> = {
   "interfaces": "Interfaces",
@@ -11,6 +11,26 @@ const COMPONENT_LABELS: Record<string, string> = {
   "device-bays": "Device Bays",
   "module-bays": "Module Bays",
 };
+
+export function ChangedItemsList({ items }: { items: ChangedItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div style={{ marginLeft: 12 }}>
+      {items.map((item) => (
+        <div key={item.name} style={{ marginBottom: 2 }}>
+          <span className="mono" style={{ color: "var(--warning)" }}>{item.name}</span>
+          {": "}
+          {item.field_changes.map((fc, i) => (
+            <span key={fc.field} className="mono" style={{ marginRight: 8 }}>
+              {i > 0 && ", "}
+              {fc.field} <span style={{ color: "var(--muted)" }}>{JSON.stringify(fc.source)} → {JSON.stringify(fc.existing)}</span>
+            </span>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function DiffView({ diff }: { diff: DiffResult }) {
   if (diff.status === "missing") {
@@ -40,11 +60,15 @@ export default function DiffView({ diff }: { diff: DiffResult }) {
         </div>
       )}
       {Object.entries(diff.component_changes).map(([key, change]) => (
-        <div key={key} style={{ marginBottom: 6 }}>
-          <span style={{ color: "var(--muted)" }}>{COMPONENT_LABELS[key] ?? key}: </span>
-          {change.added.length > 0 && <span style={{ color: "var(--success)" }}>+{change.added.length} new ({change.added.join(", ")}) </span>}
-          {change.removed.length > 0 && <span style={{ color: "var(--danger)" }}>-{change.removed.length} removed ({change.removed.join(", ")}) </span>}
-          {change.changed.length > 0 && <span style={{ color: "var(--warning)" }}>~{change.changed.length} changed ({change.changed.join(", ")})</span>}
+        <div key={key} style={{ marginBottom: 8 }}>
+          <div style={{ color: "var(--muted)" }}>{COMPONENT_LABELS[key] ?? key}:</div>
+          {change.added.length > 0 && (
+            <div style={{ marginLeft: 12, color: "var(--success)" }}>+{change.added.length} new: {change.added.join(", ")}</div>
+          )}
+          {change.removed.length > 0 && (
+            <div style={{ marginLeft: 12, color: "var(--danger)" }}>-{change.removed.length} removed: {change.removed.join(", ")}</div>
+          )}
+          <ChangedItemsList items={change.changed} />
         </div>
       ))}
     </div>

@@ -215,5 +215,72 @@ def get_merged_pr_approval(pat: str, repo_name: str, branch: str, path: str) -> 
     approved = any(r["state"] == "APPROVED" for r in reviews_resp.json())
 
     return {"found": True, "approved": approved, "pr_number": pr["number"], "pr_url": pr["html_url"]}
+
+
+def delete_file(pat: str, repo_name: str, branch: str, path: str, sha: str, commit_message: str) -> None:
     repo = _repo(pat, repo_name)
     repo.delete_file(path, commit_message, sha, branch=branch)
+
+
+def guess_manufacturer_slug(path: str) -> tuple[str | None, str | None]:
+    """
+    Cheap heuristic for the scan/preview list, before we've fetched any file
+    content: the community devicetype-library layout is
+    device-types/{Manufacturer}/{slug}.yml, so infer from path segments alone
+    rather than fetching every file (which would mean thousands of API calls
+    against a repo the size of devicetype-library just to list it).
+    """
+    parts = [p for p in path.split("/") if p]
+    if len(parts) < 2:
+        return None, None
+    manufacturer = parts[-2]
+    slug = parts[-1].rsplit(".", 1)[0]
+    return manufacturer, slug
+
+
+def bulk_create_files(
+    pat: str, repo_name: str, base_branch: str, branch_name: str, files: list[dict], commit_message_prefix: str
+) -> dict:
+    """
+    Commits many files to a single shared branch — one commit per file (GitHub's
+    Contents API doesn't support atomic multi-file commits without dropping to
+    the low-level Git Data API), but still just ONE branch and, afterward, ONE
+    pull request, so a bulk import doesn't flood the repo with dozens of
+    separate PRs. Files already present at their destination path are skipped
+    rather than overwritten. `files` is a list of {"path": str, "payload": dict}.
+    """
+    repo = _repo(pat, repo_name)
+    base_ref = repo.get_branch(base_branch)
+    try:
+        repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=base_ref.commit.sha)
+    except GithubException as exc:
+        if exc.status != 422:  # 422 = branch already exists, fine to reuse (e.g. resuming a partial import)
+            raise
+
+    created, skipped, failed = [], [], []
+    for f in files:
+        path = f["path"]
+        try:
+            repo.get_contents(path, ref=branch_name)
+            skipped.append(path)
+            continue
+        except UnknownObjectException:
+            pass
+        try:
+            yaml_text = yaml.dump(f["payload"], sort_keys=False, allow_unicode=True)
+            repo.create_file(path, f"{commit_message_prefix}: {path}", yaml_text, branch=branch_name)
+            created.append(path)
+        except Exception as exc:
+            failed.append({"path": path, "error": str(exc)})
+
+    return {"created": created, "skipped": skipped, "failed": failed}
+
+
+def open_bulk_pr(pat: str, repo_name: str, branch_name: str, base_branch: str, title: str, body: str) -> dict:
+    repo = _repo(pat, repo_name)
+    existing = list(repo.get_pulls(state="open", head=f"{repo.owner.login}:{branch_name}", base=base_branch))
+    if existing:
+        pr = existing[0]
+    else:
+        pr = repo.create_pull(title=title, body=body, head=branch_name, base=base_branch)
+    return {"pr_number": pr.number, "pr_url": pr.html_url}
