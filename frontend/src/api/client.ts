@@ -1,0 +1,368 @@
+const BASE = "/api";
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const resp = await fetch(`${BASE}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`${resp.status}: ${body}`);
+  }
+  if (resp.status === 204) return undefined as T;
+  return resp.json();
+}
+
+// ---------- Auth ----------
+
+export interface AuthUser {
+  sub?: string;
+  email?: string;
+  name?: string;
+  groups: string[];
+}
+
+export interface AuthMeResponse {
+  auth_enabled: boolean;
+  authenticated: boolean;
+  user: AuthUser | null;
+}
+
+export const authApi = {
+  me: () => request<AuthMeResponse>("/auth/me"),
+  logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+};
+
+// ---------- Instances ----------
+
+export interface NetboxInstance {
+  id: string;
+  name: string;
+  base_url: string;
+  verify_ssl: boolean;
+  description?: string | null;
+  tags: string[];
+  requires_approved_pr: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NetboxInstanceCreate {
+  name: string;
+  base_url: string;
+  api_token: string;
+  verify_ssl: boolean;
+  description?: string;
+  tags?: string[];
+  requires_approved_pr?: boolean;
+}
+
+export const instancesApi = {
+  list: () => request<NetboxInstance[]>("/instances"),
+  create: (data: NetboxInstanceCreate) =>
+    request<NetboxInstance>("/instances", { method: "POST", body: JSON.stringify(data) }),
+  update: (id: string, data: Partial<NetboxInstanceCreate>) =>
+    request<NetboxInstance>(`/instances/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  remove: (id: string) => request<void>(`/instances/${id}`, { method: "DELETE" }),
+  test: (id: string) => request<{ ok: boolean; netbox_version?: string; detail?: string }>(
+    `/instances/${id}/test`, { method: "POST" }
+  ),
+  testNew: (data: NetboxInstanceCreate) => request<{ ok: boolean; netbox_version?: string; detail?: string }>(
+    "/instances/test", { method: "POST", body: JSON.stringify(data) }
+  ),
+};
+
+// ---------- GitHub targets ----------
+
+export interface GithubTarget {
+  id: string;
+  name: string;
+  repo: string;
+  branch: string;
+  path_pattern: string;
+  custom_fields_path: string;
+  created_at: string;
+}
+
+export interface GithubTargetCreate {
+  name: string;
+  repo: string;
+  branch: string;
+  path_pattern: string;
+  custom_fields_path?: string;
+  pat: string;
+}
+
+export const githubApi = {
+  list: () => request<GithubTarget[]>("/github-targets"),
+  create: (data: GithubTargetCreate) =>
+    request<GithubTarget>("/github-targets", { method: "POST", body: JSON.stringify(data) }),
+  remove: (id: string) => request<void>(`/github-targets/${id}`, { method: "DELETE" }),
+  testNew: (data: GithubTargetCreate) => request<{ ok: boolean; detail?: string }>(
+    "/github-targets/test", { method: "POST", body: JSON.stringify(data) }
+  ),
+  test: (id: string) => request<{ ok: boolean; detail?: string }>(
+    `/github-targets/${id}/test`, { method: "POST" }
+  ),
+};
+
+// ---------- Device types (files inside a GitHub target repo) ----------
+
+export interface DeviceTypeSummary {
+  path: string;
+  manufacturer?: string;
+  model?: string;
+  slug?: string;
+}
+
+export interface DeviceTypeFile {
+  repo_target_id: string;
+  path: string;
+  sha: string;
+  payload: Record<string, any>;
+  open_pr?: { number: number; url: string } | null;
+}
+
+export interface SaveResult {
+  path: string;
+  sha: string;
+  pr_number: number;
+  pr_url: string;
+}
+
+// ---------- Cross-instance search ----------
+
+export interface SearchResultItem {
+  id: number;
+  name: string;
+  serial?: string | null;
+  type_display?: string | null;
+  site?: string | null;
+  status?: string | null;
+  url: string;
+}
+
+export interface InstanceSearchResult {
+  instance_id: string;
+  instance_name: string;
+  devices: SearchResultItem[];
+  virtual_machines: SearchResultItem[];
+  virtual_device_contexts: SearchResultItem[];
+  ip_addresses: SearchResultItem[];
+  prefixes: SearchResultItem[];
+  mac_addresses: SearchResultItem[];
+  error?: string | null;
+}
+
+export interface SearchResponse {
+  query: string;
+  results: InstanceSearchResult[];
+}
+
+export const searchApi = {
+  search: (query: string, instanceIds?: string[]) => {
+    const params = new URLSearchParams({ query });
+    (instanceIds ?? []).forEach((id) => params.append("instance_ids", id));
+    return request<SearchResponse>(`/search?${params.toString()}`);
+  },
+};
+
+export const deviceTypesApi = {
+  list: (targetId: string) => request<DeviceTypeSummary[]>(`/repos/${targetId}/device-types`),
+
+  get: (targetId: string, path: string) =>
+    request<DeviceTypeFile>(`/repos/${targetId}/device-types/file?path=${encodeURIComponent(path)}`),
+
+  create: (targetId: string, data: {
+    manufacturer: string; model: string; slug: string;
+    payload?: Record<string, any>; commit_message?: string; pr_body?: string;
+  }) => request<SaveResult>(`/repos/${targetId}/device-types`, { method: "POST", body: JSON.stringify(data) }),
+
+  save: (targetId: string, path: string, data: {
+    payload: Record<string, any>; sha?: string; commit_message?: string; pr_body?: string;
+  }) => request<SaveResult>(
+    `/repos/${targetId}/device-types/file?path=${encodeURIComponent(path)}`,
+    { method: "PUT", body: JSON.stringify(data) }
+  ),
+
+  remove: (targetId: string, path: string, sha: string, commit_message?: string) =>
+    request<void>(
+      `/repos/${targetId}/device-types/file?path=${encodeURIComponent(path)}`,
+      { method: "DELETE", body: JSON.stringify({ sha, commit_message }) }
+    ),
+
+  importYaml: (targetId: string, yaml_text: string, commit_message?: string, pr_body?: string) =>
+    request<SaveResult>(`/repos/${targetId}/device-types/import`, {
+      method: "POST", body: JSON.stringify({ yaml_text, commit_message, pr_body }),
+    }),
+
+  pushToNetbox: (targetId: string, path: string, instance_ids: string[], overwrite: boolean, tags: string[] = []) =>
+    request<{ target: string; status: string; detail?: string }[]>(
+      `/repos/${targetId}/device-types/file/push-to-netbox?path=${encodeURIComponent(path)}`,
+      { method: "POST", body: JSON.stringify({ instance_ids, tags, overwrite }) }
+    ),
+
+  diffWithNetbox: (targetId: string, path: string, instance_ids: string[], tags: string[] = []) =>
+    request<InstanceDiffResult[]>(
+      `/repos/${targetId}/device-types/file/diff-with-netbox?path=${encodeURIComponent(path)}`,
+      { method: "POST", body: JSON.stringify({ instance_ids, tags, overwrite: false }) }
+    ),
+
+  coverage: (targetId: string, path: string) =>
+    request<CoverageEntry[]>(`/repos/${targetId}/device-types/file/coverage?path=${encodeURIComponent(path)}`),
+};
+
+// ---------- Diff / drift ----------
+
+export interface BaseFieldChange {
+  field: string;
+  source: any;
+  netbox: any;
+}
+
+export interface ComponentChange {
+  added: string[];
+  removed: string[];
+  changed: string[];
+}
+
+export interface DiffResult {
+  status: "in_sync" | "drift" | "missing";
+  base_field_changes: BaseFieldChange[];
+  component_changes: Record<string, ComponentChange>;
+}
+
+export interface InstanceDiffResult {
+  instance_id: string;
+  instance_name: string;
+  diff?: DiffResult | null;
+  error?: string | null;
+}
+
+export interface DriftRecord {
+  id: string;
+  instance_id: string;
+  instance_name: string;
+  repo_target_id: string;
+  repo_target_name: string;
+  file_path: string;
+  status: string;
+  diff?: DiffResult | null;
+  checked_at: string;
+}
+
+export const driftApi = {
+  list: () => request<DriftRecord[]>("/drift"),
+  checkNow: () => request<DriftRecord[]>("/drift/check-now", { method: "POST" }),
+};
+
+// ---------- Audit log ----------
+
+export interface AuditLogEntry {
+  id: string;
+  created_at: string;
+  action_type: string; // "github" or "netbox"
+  target_name: string;
+  repo_target_id: string;
+  repo_target_name: string;
+  file_path: string;
+  status: string;
+  detail?: string | null;
+  actor_sub?: string | null;
+  actor_name?: string | null;
+  actor_email?: string | null;
+}
+
+export const auditApi = {
+  list: () => request<AuditLogEntry[]>("/audit"),
+};
+
+// ---------- Fleet visibility ----------
+
+export interface TokenExpiryInfo {
+  known: boolean;
+  expires?: string | null;
+  note?: string | null;
+}
+
+export interface InstanceHealth {
+  instance_id: string;
+  instance_name: string;
+  reachable: boolean;
+  netbox_version?: string | null;
+  python_version?: string | null;
+  plugins: Record<string, any>;
+  response_time_ms?: number | null;
+  error?: string | null;
+  token_expiry: TokenExpiryInfo;
+}
+
+export interface GithubTokenStatus {
+  target_id: string;
+  target_name: string;
+  token_expiry: TokenExpiryInfo;
+}
+
+export const fleetApi = {
+  health: () => request<InstanceHealth[]>("/fleet/health"),
+  githubTokenStatus: () => request<GithubTokenStatus[]>("/fleet/github-token-status"),
+};
+
+export interface CoverageEntry {
+  instance_id: string;
+  instance_name: string;
+  status: string;
+  error?: string | null;
+}
+
+// ---------- Custom-fields template ----------
+
+export interface CustomFieldsTemplateFile {
+  repo_target_id: string;
+  path: string;
+  exists: boolean;
+  sha?: string | null;
+  payload: { custom_fields: Record<string, any>[]; custom_field_choice_sets: Record<string, any>[] };
+  open_pr?: { number: number; url: string } | null;
+}
+
+export interface NamedListDiff {
+  missing_on_instance: string[];
+  extra_on_instance: string[];
+  changed: string[];
+}
+
+export interface CustomFieldsDiffResult {
+  status: string;
+  custom_fields?: NamedListDiff | null;
+  custom_field_choice_sets?: NamedListDiff | null;
+}
+
+export interface InstanceCustomFieldsDiffResult {
+  instance_id: string;
+  instance_name: string;
+  diff?: CustomFieldsDiffResult | null;
+  error?: string | null;
+}
+
+export const customFieldsApi = {
+  get: (targetId: string) => request<CustomFieldsTemplateFile>(`/repos/${targetId}/custom-fields/file`),
+
+  save: (targetId: string, data: { payload: Record<string, any>; sha?: string; commit_message?: string; pr_body?: string }) =>
+    request<SaveResult>(`/repos/${targetId}/custom-fields/file`, { method: "PUT", body: JSON.stringify(data) }),
+
+  importFromInstance: (targetId: string, instance_id: string, sha?: string, commit_message?: string, pr_body?: string) =>
+    request<SaveResult>(`/repos/${targetId}/custom-fields/import`, {
+      method: "POST", body: JSON.stringify({ instance_id, sha, commit_message, pr_body }),
+    }),
+
+  push: (targetId: string, instance_ids: string[], tags: string[], overwrite: boolean) =>
+    request<{ target: string; status: string; detail?: string }[]>(`/repos/${targetId}/custom-fields/push`, {
+      method: "POST", body: JSON.stringify({ instance_ids, tags, overwrite }),
+    }),
+
+  diff: (targetId: string, instance_ids: string[], tags: string[]) =>
+    request<InstanceCustomFieldsDiffResult[]>(`/repos/${targetId}/custom-fields/diff`, {
+      method: "POST", body: JSON.stringify({ instance_ids, tags, overwrite: false }),
+    }),
+};
