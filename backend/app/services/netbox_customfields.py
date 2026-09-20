@@ -13,6 +13,7 @@ def get_existing_custom_fields(base_url: str, token: str, verify_ssl: bool) -> d
             "name": cs.name,
             "description": getattr(cs, "description", None) or None,
             "extra_choices": [list(c) for c in (getattr(cs, "extra_choices", None) or [])],
+            "base_choices": _choice_value(getattr(cs, "base_choices", None)),
             "order_alphabetically": bool(getattr(cs, "order_alphabetically", False)),
         })
 

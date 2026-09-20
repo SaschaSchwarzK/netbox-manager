@@ -370,6 +370,106 @@ def bulk_import(target_id: str, payload: schemas.BulkImportRequest, request: Req
         branch=branch_name, pr_number=pr_number, pr_url=pr_url,
         imported=commit_result["created"], skipped_existing=commit_result["skipped"], failed=all_failed,
     )
+@router.post("/import-from-netbox/scan", response_model=list[schemas.ImportFromNetboxScanEntry])
+def import_from_netbox_scan(target_id: str, payload: schemas.ImportFromNetboxScanRequest, db: Session = Depends(get_db)):
+    _get_target(target_id, db)  # 404s early if the repo target itself is bogus
+    instance = db.get(models.NetboxInstance, payload.instance_id)
+    if not instance:
+        raise HTTPException(404, "NetBox instance not found.")
+    token = crypto.decrypt(instance.api_token_encrypted)
+    try:
+        results = netbox_client.list_device_types_on_instance(instance.base_url, token, instance.verify_ssl)
+    except Exception as exc:
+        raise HTTPException(502, f"Could not list device types from {instance.name}: {exc}")
+    return [schemas.ImportFromNetboxScanEntry(**r) for r in results]
+
+
+@router.post("/import-from-netbox", response_model=schemas.BulkImportResult)
+def import_from_netbox(target_id: str, payload: schemas.ImportFromNetboxRequest, request: Request, db: Session = Depends(get_db)):
+    """
+    Fetches each selected device type's full definition (components included)
+    from a NetBox instance and lands all of them on ONE shared branch with ONE
+    pull request against the target repo — the same batching approach as the
+    library bulk-import, just with a NetBox instance as the source instead of
+    another git repo. Propagating the result on to *other* NetBox instances is
+    deliberately a separate, later step (the normal Publish tab, once this PR
+    is reviewed and merged) rather than something this endpoint also does —
+    pushing straight from an unreviewed import would bypass the PR-only and
+    approval-gate guarantees the rest of the app relies on.
+    """
+    target = _get_target(target_id, db)
+    instance = db.get(models.NetboxInstance, payload.instance_id)
+    if not instance:
+        raise HTTPException(404, "NetBox instance not found.")
+
+    pat = crypto.decrypt(target.pat_encrypted)
+    actor = get_current_actor(request)
+
+    if not payload.selections:
+        raise HTTPException(400, "No device types selected to import.")
+
+    token = crypto.decrypt(instance.api_token_encrypted)
+    files_to_commit = []
+    prevalidation_failures = []
+    for sel in payload.selections:
+        key = f"{sel.manufacturer}/{sel.slug}"
+        try:
+            fetched = netbox_client.get_existing_device_type(instance.base_url, token, instance.verify_ssl, sel.manufacturer, sel.slug)
+            if fetched is None:
+                raise ValueError("No longer found on this instance.")
+            validated = DeviceType(**fetched)
+        except Exception as exc:
+            prevalidation_failures.append(schemas.BulkImportFailure(path=key, error=str(exc)))
+            continue
+        dest_path = target.path_pattern.format(manufacturer=validated.manufacturer, slug=validated.slug, model=validated.model)
+        files_to_commit.append({"path": dest_path, "payload": validated.to_yaml_dict()})
+
+    branch_name = f"import-from-netbox/{uuid.uuid4().hex[:10]}"
+    commit_message_prefix = payload.commit_message or f"Import from NetBox instance {instance.name}"
+    audit_file_path = f"import-from-netbox ({len(payload.selections)} device types from {instance.name})"
+
+    try:
+        commit_result = github_repo.bulk_create_files(pat, target.repo, target.branch, branch_name, files_to_commit, commit_message_prefix)
+    except Exception as exc:
+        _log_action(db, repo_target_id=target_id, file_path=audit_file_path,
+                    target_name=target.name, status="error", detail=str(exc), actor=actor)
+        raise _github_error_to_http(exc)
+
+    all_failed = prevalidation_failures + [schemas.BulkImportFailure(**f) for f in commit_result["failed"]]
+    pr_number, pr_url = None, None
+
+    if commit_result["created"]:
+        pr_title = payload.pr_title or f"Import {len(commit_result['created'])} device types from {instance.name}"
+        pr_body_lines = [
+            f"Imports {len(commit_result['created'])} device type(s) from NetBox instance **{instance.name}**:",
+            "", *[f"- {p}" for p in commit_result["created"]],
+        ]
+        if commit_result["skipped"]:
+            pr_body_lines += ["", f"Skipped ({len(commit_result['skipped'])}, already exist at destination):",
+                               *[f"- {p}" for p in commit_result["skipped"]]]
+        if all_failed:
+            pr_body_lines += ["", f"Failed ({len(all_failed)}):", *[f"- {f.path}: {f.error}" for f in all_failed]]
+        pr_body = payload.pr_body or "\n".join(pr_body_lines)
+
+        try:
+            pr_result = github_repo.open_bulk_pr(pat, target.repo, branch_name, target.branch, pr_title, _with_actor_trailer(pr_body, actor))
+            pr_number, pr_url = pr_result["pr_number"], pr_result["pr_url"]
+        except Exception as exc:
+            all_failed.append(schemas.BulkImportFailure(path="(PR creation)", error=str(exc)))
+
+    status = "success" if commit_result["created"] else "error"
+    detail = f"Imported {len(commit_result['created'])}, skipped {len(commit_result['skipped'])}, failed {len(all_failed)}."
+    if pr_number:
+        detail += f" PR #{pr_number}."
+    _log_action(db, repo_target_id=target_id, file_path=audit_file_path,
+                target_name=target.name, status=status, detail=detail, actor=actor)
+
+    return schemas.BulkImportResult(
+        branch=branch_name, pr_number=pr_number, pr_url=pr_url,
+        imported=commit_result["created"], skipped_existing=commit_result["skipped"], failed=all_failed,
+    )
+
+
 @router.post("/file/diff-with-netbox", response_model=list[schemas.InstanceDiffResult])
 def diff_with_netbox(
     target_id: str, payload: schemas.PushToNetboxRequest, path: str = Query(...), db: Session = Depends(get_db)

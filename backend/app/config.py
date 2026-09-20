@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     session_secret_key: str = "CHANGE_ME_GENERATE_A_RANDOM_SECRET"
     session_cookie_secure: bool = False  # set True once served over HTTPS
 
+    # Syslog forwarding of the audit log — config-file only, deliberately not
+    # editable from the UI (the UI shows these values read-only plus a test button).
+    syslog_enabled: bool = False
+    syslog_protocol: str = "udp"  # "udp" or "tcp"
+    syslog_host: str = ""
+    syslog_port: int = 514
+    syslog_facility: str = "local0"  # standard syslog facility keyword, see RFC 5424 / RFC 3164
+    syslog_app_name: str = "netbox-manager"
+
     class Config:
         env_file = ".env"
         env_prefix = "NBM_"

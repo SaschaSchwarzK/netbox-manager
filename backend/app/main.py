@@ -11,6 +11,8 @@ from app.migrations import run_lightweight_migrations
 from app.routers import auth, device_types, drift, fleet, github, instances, search
 from app.routers import audit as audit_router
 from app.routers import custom_fields
+from app.routers import syslog as syslog_router
+from app.services import syslog_client  # noqa: F401  (import registers the audit -> syslog event listener)
 
 Base.metadata.create_all(bind=engine)
 run_lightweight_migrations(engine, Base)
@@ -59,6 +61,7 @@ app.include_router(drift.router)
 app.include_router(audit_router.router)
 app.include_router(fleet.router)
 app.include_router(custom_fields.router)
+app.include_router(syslog_router.router)
 
 
 def _run_scheduled_drift_check():

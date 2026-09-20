@@ -14,7 +14,8 @@ from pydantic import BaseModel, Field
 class CustomFieldChoiceSet(BaseModel):
     name: str
     description: Optional[str] = None
-    extra_choices: list[list[str]] = Field(default_factory=list)  # [[value, label], ...]
+    extra_choices: list[list[str]] = Field(default_factory=list)  # [[value, label], ...] — these ARE the individual "custom field choices"
+    base_choices: Optional[str] = None  # references one of NetBox's predefined choice sets (e.g. a built-in enum), instead of/alongside extra_choices
     order_alphabetically: bool = False
 
 

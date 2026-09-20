@@ -234,6 +234,25 @@ export interface BulkImportResult {
   failed: BulkImportFailure[];
 }
 
+export interface SyslogSettings {
+  enabled: boolean;
+  protocol: string;
+  host: string;
+  port: number;
+  facility: string;
+  app_name: string;
+}
+
+export interface SyslogTestResult {
+  ok: boolean;
+  detail: string;
+}
+
+export const syslogApi = {
+  getSettings: () => request<SyslogSettings>("/syslog/settings"),
+  test: () => request<SyslogTestResult>("/syslog/test", { method: "POST" }),
+};
+
 export const bulkImportApi = {
   scan: (targetId: string, source_repo: string, source_branch: string, source_base_dir: string, source_pat?: string) =>
     request<BulkImportScanEntry[]>(`/repos/${targetId}/device-types/bulk-import/scan`, {
@@ -244,6 +263,29 @@ export const bulkImportApi = {
     source_repo: string; source_branch: string; source_pat?: string; paths: string[];
     commit_message?: string; pr_title?: string; pr_body?: string;
   }) => request<BulkImportResult>(`/repos/${targetId}/device-types/bulk-import`, {
+    method: "POST", body: JSON.stringify(data),
+  }),
+};
+
+// ---------- Import device types from a NetBox instance into git ----------
+
+export interface ImportFromNetboxScanEntry {
+  manufacturer: string;
+  model: string;
+  slug: string;
+  u_height?: number | null;
+}
+
+export const importFromNetboxApi = {
+  scan: (targetId: string, instance_id: string) =>
+    request<ImportFromNetboxScanEntry[]>(`/repos/${targetId}/device-types/import-from-netbox/scan`, {
+      method: "POST", body: JSON.stringify({ instance_id }),
+    }),
+
+  import: (targetId: string, data: {
+    instance_id: string; selections: { manufacturer: string; slug: string }[];
+    commit_message?: string; pr_title?: string; pr_body?: string;
+  }) => request<BulkImportResult>(`/repos/${targetId}/device-types/import-from-netbox`, {
     method: "POST", body: JSON.stringify(data),
   }),
 };

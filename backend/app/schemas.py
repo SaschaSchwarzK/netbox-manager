@@ -270,6 +270,48 @@ class BulkImportResult(BaseModel):
     failed: list[BulkImportFailure] = []
 
 
+# ---------- Import device types from a NetBox instance into git ----------
+
+class ImportFromNetboxScanRequest(BaseModel):
+    instance_id: str
+
+
+class ImportFromNetboxScanEntry(BaseModel):
+    manufacturer: str
+    model: str
+    slug: str
+    u_height: Optional[float] = None
+
+
+class DeviceTypeKey(BaseModel):
+    manufacturer: str
+    slug: str
+
+
+class ImportFromNetboxRequest(BaseModel):
+    instance_id: str
+    selections: list[DeviceTypeKey]
+    commit_message: Optional[str] = None
+    pr_title: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+# ---------- Syslog forwarding (read-only, config-file driven) ----------
+
+class SyslogSettingsOut(BaseModel):
+    enabled: bool
+    protocol: str
+    host: str
+    port: int
+    facility: str
+    app_name: str
+
+
+class SyslogTestResult(BaseModel):
+    ok: bool
+    detail: str
+
+
 # ---------- Custom-fields template ----------
 
 class CustomFieldsTemplateOut(BaseModel):

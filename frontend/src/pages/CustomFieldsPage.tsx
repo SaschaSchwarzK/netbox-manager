@@ -29,9 +29,10 @@ const CUSTOM_FIELD_FIELDS: FieldDef[] = [
 ];
 
 const CHOICE_SET_FIELDS: FieldDef[] = [
-  { key: "name", label: "Name", width: "20%" },
-  { key: "description", label: "Description", width: "25%" },
-  { key: "extra_choices", label: "Choices (value=Label per line)", type: "pairs", width: "45%" },
+  { key: "name", label: "Name", width: "16%" },
+  { key: "description", label: "Description", width: "20%" },
+  { key: "extra_choices", label: "Choices (value=Label per line)", type: "pairs", width: "36%" },
+  { key: "base_choices", label: "Base choices (predefined, optional)", width: "18%" },
   { key: "order_alphabetically", label: "Sort A-Z", type: "checkbox", width: "10%" },
 ];
 

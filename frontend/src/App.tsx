@@ -9,6 +9,7 @@ import GithubTargetsPage from "./pages/GithubTargetsPage";
 import SearchPage from "./pages/SearchPage";
 import DriftPage from "./pages/DriftPage";
 import AuditLogPage from "./pages/AuditLogPage";
+import SyslogPage from "./pages/SyslogPage";
 import FleetPage from "./pages/FleetPage";
 import LoginScreen from "./pages/LoginScreen";
 import { authApi, AuthMeResponse } from "./api/client";
@@ -60,6 +61,9 @@ export default function App() {
             <NavLink to="/audit" className={({ isActive }) => (isActive ? "active" : "")}>
               Audit Log
             </NavLink>
+            <NavLink to="/syslog" className={({ isActive }) => (isActive ? "active" : "")}>
+              Syslog
+            </NavLink>
             <NavLink to="/instances" className={({ isActive }) => (isActive ? "active" : "")}>
               NetBox Instances
             </NavLink>
@@ -90,6 +94,7 @@ export default function App() {
             <Route path="/bulk-import" element={<BulkImportPage />} />
             <Route path="/drift" element={<DriftPage />} />
             <Route path="/audit" element={<AuditLogPage />} />
+            <Route path="/syslog" element={<SyslogPage />} />
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/github-targets" element={<GithubTargetsPage />} />
           </Routes>

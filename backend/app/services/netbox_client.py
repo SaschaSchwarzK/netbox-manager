@@ -215,6 +215,20 @@ def check_token_expiry(base_url: str, token: str, verify_ssl: bool) -> dict[str,
         return {"known": False, "expires": None, "note": str(exc)}
 
 
+def list_device_types_on_instance(base_url: str, token: str, verify_ssl: bool) -> list[dict]:
+    """Lightweight list of every device type on an instance, for a selection UI (not the full component definitions)."""
+    nb = get_client(base_url, token, verify_ssl)
+    results = []
+    for dt in nb.dcim.device_types.all():
+        results.append({
+            "manufacturer": str(dt.manufacturer),
+            "model": dt.model,
+            "slug": dt.slug,
+            "u_height": float(dt.u_height) if dt.u_height is not None else None,
+        })
+    return results
+
+
 def _choice_value(field) -> str | None:
     """
     NetBox choice fields (status, subdevice_role, weight_unit, port `type`, ...)
