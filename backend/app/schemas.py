@@ -330,9 +330,31 @@ class SaveCustomFieldsRequest(BaseModel):
     pr_body: Optional[str] = None
 
 
-class ImportCustomFieldsRequest(BaseModel):
+class CustomFieldsImportScanRequest(BaseModel):
     instance_id: str
-    sha: Optional[str] = None
+
+
+class ImportCandidate(BaseModel):
+    kind: str  # "custom_field" or "choice_set"
+    name: str
+    status: str  # "missing" (not in template at all) or "changed" (in template but differs)
+    payload: dict[str, Any]  # the instance's current definition, used if this item is selected for import
+    field_changes: list[FieldLevelChange] = []  # only populated when status == "changed"
+
+
+class CustomFieldsImportScanResult(BaseModel):
+    template_exists: bool
+    candidates: list[ImportCandidate]
+
+
+class ImportCandidateKey(BaseModel):
+    kind: str
+    name: str
+
+
+class ImportCustomFieldsSelectionRequest(BaseModel):
+    instance_id: str
+    selected: list[ImportCandidateKey]
     commit_message: Optional[str] = None
     pr_body: Optional[str] = None
 

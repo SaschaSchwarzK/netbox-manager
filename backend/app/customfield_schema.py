@@ -26,8 +26,12 @@ class CustomField(BaseModel):
     content_types: list[str] = Field(default_factory=list)  # e.g. ["dcim.device", "dcim.rack"]
     description: Optional[str] = None
     required: bool = False
+    unique: bool = False
+    search_weight: Optional[int] = 1000
     default: Optional[Any] = None
-    choice_set: Optional[str] = None  # references a CustomFieldChoiceSet by name
+    choice_set: Optional[str] = None  # references a CustomFieldChoiceSet by name (select/multiselect only)
+    related_object_type: Optional[str] = None  # e.g. "dcim.device" (object/multiobject only)
+    related_object_filter: Optional[dict[str, Any]] = None  # object/multiobject only
     filter_logic: Optional[str] = "loose"
     weight: Optional[int] = 100
     group_name: Optional[str] = None
@@ -37,6 +41,7 @@ class CustomField(BaseModel):
     validation_minimum: Optional[int] = None
     validation_maximum: Optional[int] = None
     validation_regex: Optional[str] = None
+    comments: Optional[str] = None
 
 
 class CustomFieldsTemplate(BaseModel):

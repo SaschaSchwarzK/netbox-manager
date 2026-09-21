@@ -2,39 +2,11 @@ import { useEffect, useState } from "react";
 import yaml from "js-yaml";
 import {
   githubApi, GithubTarget, instancesApi, NetboxInstance,
-  customFieldsApi, CustomFieldsTemplateFile, InstanceCustomFieldsDiffResult,
+  customFieldsApi, CustomFieldsTemplateFile, InstanceCustomFieldsDiffResult, ImportCandidate,
 } from "../api/client";
-import ComponentGrid, { FieldDef } from "../components/ComponentGrid";
 import { ChangedItemsList } from "../components/DiffView";
-
-const CF_TYPES = [
-  "text", "longtext", "integer", "decimal", "boolean", "date", "datetime",
-  "url", "json", "select", "multiselect", "object", "multiobject",
-];
-const FILTER_LOGIC = ["disabled", "loose", "exact"];
-const UI_VISIBLE = ["always", "if-set", "hidden"];
-const UI_EDITABLE = ["yes", "no", "hidden"];
-
-const CUSTOM_FIELD_FIELDS: FieldDef[] = [
-  { key: "name", label: "Name", width: "12%" },
-  { key: "label", label: "Label", width: "12%" },
-  { key: "type", label: "Type", type: "select", options: CF_TYPES, width: "10%" },
-  { key: "content_types", label: "Content types (csv)", type: "csv", width: "16%" },
-  { key: "choice_set", label: "Choice set" },
-  { key: "required", label: "Req'd", type: "checkbox", width: "6%" },
-  { key: "group_name", label: "Group" },
-  { key: "filter_logic", label: "Filter", type: "select", options: FILTER_LOGIC, width: "8%" },
-  { key: "ui_visible", label: "UI visible", type: "select", options: UI_VISIBLE, width: "9%" },
-  { key: "ui_editable", label: "UI editable", type: "select", options: UI_EDITABLE, width: "9%" },
-];
-
-const CHOICE_SET_FIELDS: FieldDef[] = [
-  { key: "name", label: "Name", width: "16%" },
-  { key: "description", label: "Description", width: "20%" },
-  { key: "extra_choices", label: "Choices (value=Label per line)", type: "pairs", width: "36%" },
-  { key: "base_choices", label: "Base choices (predefined, optional)", width: "18%" },
-  { key: "order_alphabetically", label: "Sort A-Z", type: "checkbox", width: "10%" },
-];
+import CustomFieldForm from "../components/CustomFieldForm";
+import ChoiceSetForm from "../components/ChoiceSetForm";
 
 function generateCommitMessage(payload: any): string {
   return `Update custom-fields template (${(payload.custom_fields ?? []).length} fields, ${(payload.custom_field_choice_sets ?? []).length} choice sets)`;
@@ -66,7 +38,16 @@ export default function CustomFieldsPage() {
   const [diffResults, setDiffResults] = useState<InstanceCustomFieldsDiffResult[] | null>(null);
   const [diffing, setDiffing] = useState(false);
   const [importInstance, setImportInstance] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [candidates, setCandidates] = useState<ImportCandidate[] | null>(null);
+  const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<{ pr_number: number; pr_url: string } | null>(null);
+
+  const [fieldFormOpen, setFieldFormOpen] = useState<{ index: number | null } | null>(null);
+  const [choiceSetFormOpen, setChoiceSetFormOpen] = useState<{ index: number | null } | null>(null);
 
   useEffect(() => {
     githubApi.list().then((t) => { setTargets(t); if (t.length > 0) setSelectedTarget(t[0].id); });
@@ -105,6 +86,32 @@ export default function CustomFieldsPage() {
     setDirty(true);
   };
 
+  const fields: Record<string, any>[] = file.payload.custom_fields ?? [];
+  const choiceSets: Record<string, any>[] = file.payload.custom_field_choice_sets ?? [];
+  const choiceSetNames = choiceSets.map((c) => c.name);
+
+  const saveFieldForm = (value: Record<string, any>) => {
+    const next = [...fields];
+    if (fieldFormOpen?.index == null) next.push(value); else next[fieldFormOpen.index] = value;
+    updateFields(next);
+    setFieldFormOpen(null);
+  };
+  const deleteField = (idx: number) => {
+    if (!confirm(`Delete custom field "${fields[idx].name}"?`)) return;
+    updateFields(fields.filter((_, i) => i !== idx));
+  };
+
+  const saveChoiceSetForm = (value: Record<string, any>) => {
+    const next = [...choiceSets];
+    if (choiceSetFormOpen?.index == null) next.push(value); else next[choiceSetFormOpen.index] = value;
+    updateChoiceSets(next);
+    setChoiceSetFormOpen(null);
+  };
+  const deleteChoiceSet = (idx: number) => {
+    if (!confirm(`Delete choice set "${choiceSets[idx].name}"?`)) return;
+    updateChoiceSets(choiceSets.filter((_, i) => i !== idx));
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setSaveError(null);
@@ -122,13 +129,47 @@ export default function CustomFieldsPage() {
     }
   };
 
-  const handleImport = async () => {
+  const handleScanImport = async () => {
     if (!importInstance) return;
-    setImporting(true);
+    setScanning(true);
+    setScanError(null);
+    setCandidates(null);
+    setSelectedCandidates(new Set());
+    setImportResult(null);
     try {
-      const result = await customFieldsApi.importFromInstance(selectedTarget, importInstance, file.sha ?? undefined);
-      setLastResult(result);
+      const result = await customFieldsApi.scanImport(selectedTarget, importInstance);
+      setCandidates(result.candidates);
+    } catch (err: any) {
+      setScanError(err.message ?? "Scan failed.");
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const candidateKey = (c: ImportCandidate) => `${c.kind}:${c.name}`;
+  const toggleCandidate = (key: string) => {
+    setSelectedCandidates((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  const handleImportSelected = async () => {
+    if (!candidates) return;
+    const selected = candidates.filter((c) => selectedCandidates.has(candidateKey(c)))
+      .map((c) => ({ kind: c.kind, name: c.name }));
+    if (selected.length === 0) return;
+    setImporting(true);
+    setImportError(null);
+    try {
+      const result = await customFieldsApi.importSelected(selectedTarget, { instance_id: importInstance, selected });
+      setImportResult(result);
+      setCandidates(null);
+      setSelectedCandidates(new Set());
       loadFile();
+    } catch (err: any) {
+      setImportError(err.message ?? "Import failed.");
     } finally {
       setImporting(false);
     }
@@ -197,13 +238,72 @@ export default function CustomFieldsPage() {
 
           {activeTab === "fields" && (
             <div className="card">
-              <ComponentGrid rows={file.payload.custom_fields ?? []} fields={CUSTOM_FIELD_FIELDS} onChange={updateFields} />
+              <div className="toolbar">
+                <button className="primary" onClick={() => setFieldFormOpen({ index: null })}>+ Add Custom Field</button>
+              </div>
+              <table>
+                <thead><tr><th>Name</th><th>Label</th><th>Type</th><th>Model(s)</th><th>Required</th><th></th></tr></thead>
+                <tbody>
+                  {fields.map((f, idx) => (
+                    <tr key={f.name || idx}>
+                      <td className="mono">{f.name}</td>
+                      <td>{f.label || "—"}</td>
+                      <td>{f.type}</td>
+                      <td>{(f.content_types ?? []).length} model(s)</td>
+                      <td>{f.required ? "Yes" : "No"}</td>
+                      <td className="list-table-actions">
+                        <button onClick={() => setFieldFormOpen({ index: idx })} style={{ padding: "2px 8px" }}>Edit</button>{" "}
+                        <button className="danger" onClick={() => deleteField(idx)} style={{ padding: "2px 8px" }}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {fields.length === 0 && <tr><td colSpan={6} style={{ color: "var(--muted)" }}>No custom fields yet.</td></tr>}
+                </tbody>
+              </table>
             </div>
           )}
           {activeTab === "choice-sets" && (
             <div className="card">
-              <ComponentGrid rows={file.payload.custom_field_choice_sets ?? []} fields={CHOICE_SET_FIELDS} onChange={updateChoiceSets} />
+              <div className="toolbar">
+                <button className="primary" onClick={() => setChoiceSetFormOpen({ index: null })}>+ Add Choice Set</button>
+              </div>
+              <table>
+                <thead><tr><th>Name</th><th>Description</th><th>Base choices</th><th>Extra choices</th><th></th></tr></thead>
+                <tbody>
+                  {choiceSets.map((c, idx) => (
+                    <tr key={c.name || idx}>
+                      <td className="mono">{c.name}</td>
+                      <td>{c.description || "—"}</td>
+                      <td>{c.base_choices || "—"}</td>
+                      <td>{(c.extra_choices ?? []).length}</td>
+                      <td className="list-table-actions">
+                        <button onClick={() => setChoiceSetFormOpen({ index: idx })} style={{ padding: "2px 8px" }}>Edit</button>{" "}
+                        <button className="danger" onClick={() => deleteChoiceSet(idx)} style={{ padding: "2px 8px" }}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {choiceSets.length === 0 && <tr><td colSpan={5} style={{ color: "var(--muted)" }}>No choice sets yet.</td></tr>}
+                </tbody>
+              </table>
             </div>
+          )}
+
+          {fieldFormOpen && (
+            <CustomFieldForm
+              initial={fieldFormOpen.index != null ? fields[fieldFormOpen.index] : null}
+              existingNames={fields.filter((_, i) => i !== fieldFormOpen.index).map((f) => f.name)}
+              choiceSetNames={choiceSetNames}
+              onSave={saveFieldForm}
+              onCancel={() => setFieldFormOpen(null)}
+            />
+          )}
+          {choiceSetFormOpen && (
+            <ChoiceSetForm
+              initial={choiceSetFormOpen.index != null ? choiceSets[choiceSetFormOpen.index] : null}
+              existingNames={choiceSets.filter((_, i) => i !== choiceSetFormOpen.index).map((c) => c.name)}
+              onSave={saveChoiceSetForm}
+              onCancel={() => setChoiceSetFormOpen(null)}
+            />
           )}
 
           {activeTab === "publish" && (
@@ -211,18 +311,67 @@ export default function CustomFieldsPage() {
               <div className="card">
                 <h2>Import from a NetBox instance</h2>
                 <p style={{ color: "var(--muted)", fontSize: 13, marginTop: -6 }}>
-                  Replaces the entire template with whatever custom fields/choice sets currently exist on the
-                  chosen instance, then opens it as a PR — nothing is written until you review and it merges.
+                  Scans the instance and shows only what's missing from the template or differs from it — pick
+                  which ones to bring in. Nothing changes until you import your selection, and that's a PR too.
                 </p>
                 <div className="form-row">
-                  <select value={importInstance} onChange={(e) => setImportInstance(e.target.value)}>
+                  <select value={importInstance} onChange={(e) => { setImportInstance(e.target.value); setCandidates(null); }}>
                     <option value="">— select instance —</option>
                     {instances.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
                   </select>
                 </div>
-                <button className="primary" disabled={!importInstance || importing} onClick={handleImport}>
-                  {importing ? "Importing…" : "Import & open PR"}
+                <button className="primary" disabled={!importInstance || scanning} onClick={handleScanImport}>
+                  {scanning ? "Scanning…" : "Scan for differences"}
                 </button>
+                {scanError && <p style={{ color: "var(--danger)", fontSize: 13 }}>{scanError}</p>}
+
+                {candidates && candidates.length === 0 && (
+                  <p style={{ color: "var(--success)", fontSize: 13, marginTop: 10 }}>
+                    Nothing to import — the template already covers everything on this instance.
+                  </p>
+                )}
+
+                {candidates && candidates.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <table>
+                      <thead><tr><th></th><th>Kind</th><th>Name</th><th>Status</th><th>What differs</th></tr></thead>
+                      <tbody>
+                        {candidates.map((c) => {
+                          const key = candidateKey(c);
+                          return (
+                            <tr key={key}>
+                              <td><input type="checkbox" style={{ width: "auto" }} checked={selectedCandidates.has(key)} onChange={() => toggleCandidate(key)} /></td>
+                              <td>{c.kind === "custom_field" ? "Field" : "Choice set"}</td>
+                              <td className="mono">{c.name}</td>
+                              <td>{c.status === "missing"
+                                ? <span className="pill" style={{ color: "var(--danger)" }}>missing from template</span>
+                                : <span className="pill" style={{ color: "var(--warning)" }}>differs</span>}</td>
+                              <td style={{ fontSize: 12 }}>
+                                {c.status === "changed" && c.field_changes.map((fc) => (
+                                  <div key={fc.field} className="mono">{fc.field}: {JSON.stringify(fc.source)} → {JSON.stringify(fc.existing)}</div>
+                                ))}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    <div className="toolbar" style={{ marginTop: 10 }}>
+                      <button onClick={() => setSelectedCandidates(new Set(candidates.map(candidateKey)))}>Select all</button>
+                      <button onClick={() => setSelectedCandidates(new Set())}>Clear</button>
+                      <button className="primary" disabled={selectedCandidates.size === 0 || importing} onClick={handleImportSelected}>
+                        {importing ? "Importing…" : `Import ${selectedCandidates.size || ""} selected & open PR`}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {importError && <p style={{ color: "var(--danger)", fontSize: 13 }}>{importError}</p>}
+                {importResult && (
+                  <p style={{ fontSize: 13, marginTop: 8 }}>
+                    <span className="status-dot status-ok" />
+                    Imported — <a href={importResult.pr_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>PR #{importResult.pr_number}</a>
+                  </p>
+                )}
               </div>
 
               <div className="card">

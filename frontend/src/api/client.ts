@@ -415,6 +415,19 @@ export interface CustomFieldsTemplateFile {
   open_pr?: { number: number; url: string } | null;
 }
 
+export interface ImportCandidate {
+  kind: "custom_field" | "choice_set";
+  name: string;
+  status: "missing" | "changed";
+  payload: Record<string, any>;
+  field_changes: FieldLevelChange[];
+}
+
+export interface CustomFieldsImportScanResult {
+  template_exists: boolean;
+  candidates: ImportCandidate[];
+}
+
 export interface NamedListDiff {
   missing_on_instance: string[];
   extra_on_instance: string[];
@@ -440,10 +453,16 @@ export const customFieldsApi = {
   save: (targetId: string, data: { payload: Record<string, any>; sha?: string; commit_message?: string; pr_body?: string }) =>
     request<SaveResult>(`/repos/${targetId}/custom-fields/file`, { method: "PUT", body: JSON.stringify(data) }),
 
-  importFromInstance: (targetId: string, instance_id: string, sha?: string, commit_message?: string, pr_body?: string) =>
-    request<SaveResult>(`/repos/${targetId}/custom-fields/import`, {
-      method: "POST", body: JSON.stringify({ instance_id, sha, commit_message, pr_body }),
+  scanImport: (targetId: string, instance_id: string) =>
+    request<CustomFieldsImportScanResult>(`/repos/${targetId}/custom-fields/import-scan`, {
+      method: "POST", body: JSON.stringify({ instance_id }),
     }),
+
+  importSelected: (targetId: string, data: {
+    instance_id: string; selected: { kind: string; name: string }[]; commit_message?: string; pr_body?: string;
+  }) => request<SaveResult>(`/repos/${targetId}/custom-fields/import`, {
+    method: "POST", body: JSON.stringify(data),
+  }),
 
   push: (targetId: string, instance_ids: string[], tags: string[], overwrite: boolean) =>
     request<{ target: string; status: string; detail?: string }[]>(`/repos/${targetId}/custom-fields/push`, {

@@ -3,6 +3,17 @@ from typing import Any
 from app.services.netbox_client import _choice_value, get_client
 
 
+def _content_type_string(ct) -> str | None:
+    """Nested content-type references (related_object_type) come back as objects with app_label/model, not a plain string."""
+    if ct is None:
+        return None
+    app_label = getattr(ct, "app_label", None)
+    model = getattr(ct, "model", None)
+    if app_label and model:
+        return f"{app_label}.{model}"
+    return str(ct)
+
+
 def get_existing_custom_fields(base_url: str, token: str, verify_ssl: bool) -> dict[str, Any]:
     """Fetch the current custom fields and choice sets from a NetBox instance, reshaped to match the template YAML."""
     nb = get_client(base_url, token, verify_ssl)
@@ -27,8 +38,12 @@ def get_existing_custom_fields(base_url: str, token: str, verify_ssl: bool) -> d
             "content_types": list(getattr(cf, "content_types", None) or []),
             "description": getattr(cf, "description", None) or None,
             "required": bool(getattr(cf, "required", False)),
+            "unique": bool(getattr(cf, "unique", False)),
+            "search_weight": getattr(cf, "search_weight", None),
             "default": getattr(cf, "default", None),
             "choice_set": str(choice_set) if choice_set else None,
+            "related_object_type": _content_type_string(getattr(cf, "related_object_type", None)),
+            "related_object_filter": getattr(cf, "related_object_filter", None),
             "filter_logic": _choice_value(getattr(cf, "filter_logic", None)),
             "weight": getattr(cf, "weight", None),
             "group_name": getattr(cf, "group_name", None) or None,
@@ -38,6 +53,7 @@ def get_existing_custom_fields(base_url: str, token: str, verify_ssl: bool) -> d
             "validation_minimum": getattr(cf, "validation_minimum", None),
             "validation_maximum": getattr(cf, "validation_maximum", None),
             "validation_regex": getattr(cf, "validation_regex", None) or None,
+            "comments": getattr(cf, "comments", None) or None,
         })
 
     return {"custom_fields": fields, "custom_field_choice_sets": choice_sets}
@@ -72,6 +88,14 @@ def push_custom_fields(base_url: str, token: str, verify_ssl: bool, template: di
                 payload["choice_set"] = cs_obj.id
             else:
                 payload.pop("choice_set", None)  # referenced choice set doesn't exist here; drop rather than fail the whole push
+
+        if payload.get("related_object_type"):
+            app_label, _, model = payload["related_object_type"].partition(".")
+            ct_obj = nb.core.object_types.get(app_label=app_label, model=model) if app_label and model else None
+            if ct_obj:
+                payload["related_object_type"] = ct_obj.id
+            else:
+                payload.pop("related_object_type", None)  # unknown/unavailable content type on this instance; drop rather than fail
 
         existing = nb.extras.custom_fields.get(name=cf["name"])
         if existing:
