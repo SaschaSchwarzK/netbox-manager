@@ -8,8 +8,9 @@ services:
       - ./backend/.env
     volumes:
       - dbdata:/app/data
+      - certdata:/app/certs
     ports:
-      - "8088:8080"
+      - "8443:8443"
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
@@ -18,16 +19,9 @@ services:
     security_opt:
       - no-new-privileges:true
     stop_grace_period: 15s
-    healthcheck:
-      test:
-        - CMD
-        - /app/venv/bin/python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=2)"
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
-
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 128
 volumes:
   dbdata:
+  certdata:

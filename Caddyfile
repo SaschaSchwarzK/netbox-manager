@@ -1,10 +1,18 @@
 {
 	admin off
 	auto_https off
+	persist_config off
 }
 
-:8080 {
+:8443 {
+	tls /app/certs/cert.pem /app/certs/key.pem
 	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+	}
 
 	@backend path /api/* /docs* /redoc* /openapi.json
 	handle @backend {

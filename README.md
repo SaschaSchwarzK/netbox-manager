@@ -12,7 +12,7 @@ For application workflows and annotated screenshot placeholders, see the
 
 ## Stack
 
-- **Backend:** FastAPI + SQLAlchemy (SQLite) + `pynetbox` for the NetBox API + `PyGithub` for reading/committing device-type files.
+- **Backend:** FastAPI served by Uvicorn + SQLAlchemy (SQLite) + `pynetbox` for the NetBox API + `PyGithub` for reading/committing device-type files.
 - **Frontend:** React + TypeScript + Vite.
 - **Deployment:** one minimal Docker container running Caddy and the FastAPI application, with no separate database service.
 
@@ -37,8 +37,10 @@ For application workflows and annotated screenshot placeholders, see the
    docker compose up --build
    ```
 
-4. Open the UI at http://localhost:8088. Swagger UI is available at
-   http://localhost:8088/docs through the same Caddy endpoint.
+4. Open the UI at https://localhost:8443. Swagger UI is available at
+   https://localhost:8443/docs through the same Caddy endpoint. On first startup the application
+   creates a self-signed certificate, so browsers will show a trust warning until you replace it
+   with a certificate trusted by your environment.
 
 To run with Docker directly instead of Compose, use the included launcher. Pass `--build` when
 the image needs to be built or rebuilt; omit it to start an existing image:
@@ -52,13 +54,26 @@ The script uses the same environment file, persistent volume, port, read-only fi
 security restrictions as the Compose deployment. Run `./run-docker.sh --help` to see configuration
 overrides and the `--replace` option.
 
+Both launch methods default to one CPU, 256 MiB of memory, and 128 processes. The direct-Docker
+launcher allows these limits to be changed with `CPU_LIMIT`, `MEMORY_LIMIT`, and `PIDS_LIMIT`.
+
+Container behavior can be checked locally with `./scripts/container-smoke-test.sh IMAGE_NAME`.
+The same checks run in CI together with a Trivy scan for fixable high and critical vulnerabilities.
+
 ### Container layout
 
 The root `Dockerfile` has three stages: Caddy is compiled in the free Chainguard Go development
 image, Python dependencies and the React frontend are built in the free Chainguard Python
 development image, and only the resulting artifacts are copied into the minimal Chainguard Python
 runtime. The deployed container runs as UID/GID `65532`, drops all Linux capabilities, has a
-read-only root filesystem, and writes only to the SQLite volume and a small `/tmp` tmpfs.
+read-only root filesystem, and writes only to the SQLite and certificate volumes plus a small
+`/tmp` tmpfs. The database is always `/app/data/netbox_manager.db`; certificates are always
+`/app/certs/cert.pem` and `/app/certs/key.pem`. These paths cannot be overridden with environment
+variables.
+
+To install a trusted certificate, replace `cert.pem` and `key.pem` in the certificate volume and
+recreate the container. If either file is missing, the application generates a new self-signed
+pair during startup.
 
 Older releases ran the backend as root. Before starting this version against an existing
 `netbox-manager_dbdata` volume, change its ownership once while the old stack is stopped:
