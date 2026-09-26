@@ -18,14 +18,25 @@ class Settings(BaseSettings):
     oidc_groups_claim: str = "groups"  # the ID token claim holding the user's group memberships
     session_secret_key: str = "CHANGE_ME_GENERATE_A_RANDOM_SECRET"
     session_cookie_secure: bool = False  # set True once served over HTTPS
-    default_role: str = "viewer"  # role for an authenticated user whose groups match no role_mapping
+    local_admin_user: str = ""
+    local_admin_password: str = ""
+    require_auth: bool = False
+    default_role: str = "viewer"  # role for an authenticated user whose groups match no access mapping role
     # Comma-separated OIDC group name(s) that always resolve to admin, regardless of what's in the
-    # role_mappings table. This is the group reference that tells NetBox Manager who's allowed to
-    # manage NetBox Manager itself (instances, GitHub targets, and the role/scope mappings below) —
+    # access mappings. This is the group reference that tells NetBox Manager who's allowed to
+    # manage NetBox Manager itself (instances, GitHub targets, and access mappings) —
     # set it to your real admin/network-ops group and leave it set permanently. It also solves the
     # chicken-and-egg problem of getting a first admin in: without it, nobody could ever create the
-    # first role_mapping, since creating one requires already being admin.
+    # first access mapping, since creating one requires already being admin.
     bootstrap_admin_groups: str = ""
+
+    @property
+    def local_admin_enabled(self) -> bool:
+        return bool(self.local_admin_user.strip() and self.local_admin_password.strip())
+
+    @property
+    def auth_required(self) -> bool:
+        return bool(self.oidc_issuer) or self.local_admin_enabled
 
     # Syslog forwarding of the audit log — config-file only, deliberately not
     # editable from the UI (the UI shows these values read-only plus a test button).

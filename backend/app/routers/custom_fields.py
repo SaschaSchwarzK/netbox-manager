@@ -7,7 +7,7 @@ from app import crypto, models, schemas
 from app.auth import get_current_actor
 from app.customfield_schema import CustomFieldsTemplate
 from app.database import get_db
-from app.rbac import AccessContext, filter_scoped, get_access_context, has_role_at_least, require_role
+from app.rbac import AccessContext, filter_scoped, get_access_context, has_role_at_least, require_role, role_for_resource
 from app.routers.device_types import _get_target, _github_error_to_http, _log_action, _resolve_instances, _with_actor_trailer
 from app.services import diff as diff_mod
 from app.services import github_repo, netbox_customfields
@@ -248,7 +248,7 @@ def push_to_instances(
     results = []
     for instance in instances:
         if instance.requires_approved_pr:
-            if not has_role_at_least(ctx.role, "admin"):
+            if not has_role_at_least(role_for_resource(ctx, "instance", instance.id), "admin"):
                 detail = "Blocked: this instance requires the admin role to push to (it's flagged 'requires an approved PR')."
                 results.append(schemas.PushResultItem(target=instance.name, status="error", detail=detail))
                 db.add(models.DeviceTypePushHistory(

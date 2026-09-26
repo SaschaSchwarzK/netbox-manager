@@ -20,16 +20,24 @@ export default function App() {
   const [me, setMe] = useState<AuthMeResponse | null>(null);
 
   useEffect(() => {
-    authApi.me().then(setMe).catch(() => setMe({ auth_enabled: true, authenticated: false, user: null, role: "viewer" }));
+    authApi.me().then(setMe).catch(() => setMe({
+      auth_enabled: true,
+      oidc_enabled: false,
+      local_login_enabled: false,
+      authenticated: false,
+      user: null,
+      role: "viewer",
+      app_admin: false,
+    }));
   }, []);
 
   if (!me) return null; // brief flash while the initial /api/auth/me check resolves
 
   if (me.auth_enabled && !me.authenticated) {
-    return <LoginScreen />;
+    return <LoginScreen auth={me} />;
   }
 
-  const access = makeAccessValue(me.role);
+  const access = makeAccessValue(me.role, me.app_admin);
 
   const handleLogout = async () => {
     await authApi.logout();
@@ -75,7 +83,7 @@ export default function App() {
             <NavLink to="/github-targets" className={({ isActive }) => (isActive ? "active" : "")}>
               GitHub Targets
             </NavLink>
-            {access.can("admin") && (
+            {access.appAdmin && (
               <NavLink to="/access-control" className={({ isActive }) => (isActive ? "active" : "")}>
                 Access Control
               </NavLink>
@@ -108,7 +116,7 @@ export default function App() {
             <Route path="/syslog" element={<SyslogPage />} />
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/github-targets" element={<GithubTargetsPage />} />
-            {access.can("admin") && <Route path="/access-control" element={<AccessControlPage />} />}
+            {access.appAdmin && <Route path="/access-control" element={<AccessControlPage />} />}
           </Routes>
         </main>
       </div>

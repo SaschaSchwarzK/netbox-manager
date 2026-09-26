@@ -4,8 +4,19 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from app import models
-from app.auth import SESSION_COOKIE, SESSION_MAX_AGE, create_session_cookie, get_current_user_optional, oauth
+from app import models, schemas
+from app.auth import (
+    SESSION_COOKIE,
+    SESSION_MAX_AGE,
+    check_local_credentials,
+    clear_local_login_failures,
+    create_local_session_cookie,
+    create_session_cookie,
+    get_current_user_optional,
+    local_login_retry_after,
+    oauth,
+    record_local_login_failure,
+)
 from app.config import settings
 from app.database import get_db
 from app.rbac import get_access_context, AccessContext
@@ -71,9 +82,61 @@ async def logout():
     return response
 
 
+@router.post("/local-login")
+async def local_login(payload: schemas.LocalLoginRequest, request: Request):
+    if not settings.local_admin_enabled:
+        raise HTTPException(403, "Local admin login is not configured.")
+    client_host = request.client.host if request.client else "unknown"
+    retry_after = local_login_retry_after(client_host)
+    if retry_after is not None:
+        raise HTTPException(
+            429,
+            "Too many failed login attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    if not check_local_credentials(payload.username, payload.password):
+        record_local_login_failure(client_host)
+        raise HTTPException(401, "Invalid credentials.")
+
+    clear_local_login_failures(client_host)
+    user = {
+        "sub": f"local:{payload.username}",
+        "email": None,
+        "name": f"local admin ({payload.username})",
+        "groups": [],
+        "local": True,
+    }
+    response = JSONResponse({"ok": True, "user": user, "role": "admin"})
+    response.set_cookie(
+        SESSION_COOKIE,
+        create_local_session_cookie(payload.username),
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+    )
+    return response
+
+
 @router.get("/me")
 async def me(request: Request, ctx: AccessContext = Depends(get_access_context)):
-    if not oauth:
-        return {"auth_enabled": False, "authenticated": True, "user": None, "role": ctx.role}
     user = get_current_user_optional(request)
-    return {"auth_enabled": True, "authenticated": user is not None, "user": user, "role": ctx.role}
+    if not settings.auth_required:
+        return {
+            "auth_enabled": False,
+            "oidc_enabled": oauth is not None,
+            "local_login_enabled": settings.local_admin_enabled,
+            "authenticated": True,
+            "user": None,
+            "role": ctx.role,
+            "app_admin": ctx.app_admin,
+        }
+    return {
+        "auth_enabled": settings.auth_required,
+        "oidc_enabled": oauth is not None,
+        "local_login_enabled": settings.local_admin_enabled,
+        "authenticated": user is not None,
+        "user": user,
+        "role": ctx.role,
+        "app_admin": ctx.app_admin,
+    }

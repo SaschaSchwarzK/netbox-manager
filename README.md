@@ -53,7 +53,7 @@ One consequence: listing device types fetches and parses every file in the repo 
 ## What's implemented
 
 - **NetBox instance management** — add/edit/remove instances, tokens encrypted at rest, "Test connection" hits `/api/status/`. Each instance can carry free-form **tags** (e.g. `prod`, `region:eu`) and an optional **"require an approved, merged PR"** flag.
-- **GitHub target management** — configure a repo/branch/path pattern and PAT; this doubles as both the source and destination for device-type files.
+- **GitHub target management** — configure and edit a repo/branch/path pattern and PAT, including rotating the PAT without recreating the target; this doubles as both the source and destination for device-type files.
 - **Device-type editor** — tabs for base attributes, interfaces, console ports/server ports, power ports/outlets, rear/front ports, device bays, and module bays. Each component tab is an editable grid with a bulk-add pattern helper (e.g. `GigabitEthernet1/0/{1-48}`) and a live YAML preview.
 - **Import** — upload a `.yml`/`.yaml` file; it opens as an in-memory, unsaved draft (nothing is written to GitHub until the first save).
 - **PR-only workflow** — there is no direct-commit path. Every save opens (or adds a commit to) a pull request, with an auto-generated, editable commit message and PR description summarizing what changed (component counts, added/removed fields). Re-saving a device type that already has an open PR adds to that same PR instead of forking a new one.
@@ -66,18 +66,22 @@ One consequence: listing device types fetches and parses every file in the repo 
 - **Bulk/grouped push** — instances can carry tags, and the Publish tab has "select by tag" buttons (e.g. click `region:eu` to select every instance with that tag) plus an "all" button, so pushing to a whole group is one click instead of checking boxes individually. The API also accepts a `tags` array directly for scripted/bulk pushes.
 - **Drift detection** — a background job (interval set by `NBM_DRIFT_CHECK_INTERVAL_HOURS`, default 6; set to `0` to disable) periodically re-diffs every instance/device-type pair that's had a successful push in the past, flagging anything that's drifted from the GitHub source (hand-edited in NetBox's UI, partially failed push, etc.). Results are on the **Drift** page, with a "Check all now" button for an on-demand run.
 
-### Login (OIDC)
+### Login (OIDC or break-glass local admin)
 
-The app is fully open (no login) until `NBM_OIDC_ISSUER` is set — useful for local development, but **set it before exposing this beyond a trusted network.**
+Authentication is required when either `NBM_OIDC_ISSUER` is set or both
+`NBM_LOCAL_ADMIN_USER` and `NBM_LOCAL_ADMIN_PASSWORD` are set. The local account is a
+break-glass administrator for IdP outages: it has app-admin access and bypasses resource
+scoping. Use a long random password and enable `NBM_SESSION_COOKIE_SECURE` behind HTTPS.
+`NBM_REQUIRE_AUTH=true` makes the backend refuse to start unless at least one authentication
+method is complete. With neither method configured, the app remains open for local development
+and emits a startup warning.
 
 Once configured:
 - `GET /api/auth/login` starts the standard OIDC authorization-code flow (via [Authlib](https://docs.authlib.org/)), redirecting to your provider.
 - `GET /api/auth/callback` exchanges the code for tokens; Authlib validates the ID token's signature (against the provider's published JWKS), issuer, audience, expiry, and nonce as part of that exchange — this app doesn't hand-roll any of that verification.
 - The verified claims (`sub`, `email`, `name`, and the group-membership claim named by `NBM_OIDC_GROUPS_CLAIM`) are signed into an httponly session cookie (`itsdangerous`, 12h expiry) — there's no server-side session store, so any backend replica can validate the cookie independently.
-- Every `/api/*` route except `/api/auth/*` and `/api/health` requires a valid session once OIDC is configured; unauthenticated requests get a plain 401.
+- Every `/api/*` route except `/api/auth/*` and `/api/health` requires a valid session once either authentication method is configured; unauthenticated requests get a plain 401.
 - The frontend checks `/api/auth/me` on load: if not authenticated, it shows a sign-in screen instead of the app; once signed in, the sidebar shows the user's name and groups with a sign-out button.
-
-**What this does not do yet** (planned next): map groups to app roles or scope which NetBox instances/GitHub targets a group can see — right now, any authenticated user (regardless of group) has full access to everything, same as before login existed. The groups claim is captured and available in the session (and visible in the sidebar) precisely so that mapping can be layered on without another round of provider configuration.
 
 Setting this up requires registering this app with your identity provider as a confidential web app/client, with `NBM_OIDC_REDIRECT_URI` as an allowed redirect URI. See `.env.example` for the full list of variables and provider-specific notes on the groups claim (Keycloak, Entra ID/Azure AD, and Okta all expose group membership differently).
 
@@ -106,12 +110,17 @@ The audit log can be forwarded to a remote syslog server as structured **RFC 542
 
 ### Access control (roles & scoping)
 
-Two independent mappings, managed from the **Access Control** page (admin-only):
+The **Access Control** page manages one unified mapping table. Each row maps an OIDC group to a
+role (`viewer`, `editor`, `admin`, or no role) and a scope. The `("*", "*")` scope means all
+resources; a concrete scope names one NetBox instance or GitHub target. A null role is a
+visibility-only grant. A resource with no concrete mappings remains visible to everyone, and a
+global role does not reveal resources scoped to other groups.
 
-- **Role** (`oidc_group -> viewer/editor/admin`) — gates *actions*. A user in multiple mapped groups gets the highest role among them. Viewer is read-only everywhere (Search, Fleet, Drift, Audit Log, viewing device-type/custom-field templates and their YAML). Editor adds creating/saving device-types and custom-fields templates, importing from NetBox, diff previews, and pushing to instances that *aren't* flagged `requires_approved_pr`. Admin adds managing NetBox instances, GitHub targets, the mappings themselves, and pushing to `requires_approved_pr`-flagged instances — enforced per-instance inside the push loop itself, not just at the route level, so a batch push to five instances can allow four and block the fifth. An authenticated user in no mapped group gets `NBM_DEFAULT_ROLE` (default `viewer`).
-- **Scope** (`oidc_group -> specific instance or GitHub target`) — gates *visibility*. Opt-in per resource: an instance/target with zero scope mappings stays visible to everyone; the first mapping added for it switches it to "only these groups." Enforced server-side (in `filter_scoped()`, applied to the instance/target list endpoints, Search, Fleet, and the shared `_resolve_instances()` helper used by every push/diff endpoint) — a scoped-out instance can't be targeted even by explicit ID in a raw API call, not just hidden from the UI.
-- **Bootstrapping**: `NBM_BOOTSTRAP_ADMIN_GROUPS` (comma-separated) always resolves to admin regardless of the role_mappings table. This isn't a one-time setup step — leave it set permanently. Without it, nobody could ever create the first role mapping, since doing that itself requires already being admin.
-- When OIDC isn't configured at all, every request resolves to role `admin` with scoping skipped entirely, consistent with how auth itself behaves in that mode.
+A user's highest mapped role wins, with `NBM_DEFAULT_ROLE` as the fallback.
+`NBM_BOOTSTRAP_ADMIN_GROUPS` remains the permanent app-admin bootstrap. App admins manage mappings
+and create/delete resources; a resource-scoped admin may edit that resource and now satisfies its
+`requires_approved_pr` admin gate. Legacy `role_mappings` and `scope_mappings` rows are expanded
+once at startup into access mappings and are never read for authorization afterward.
 
 ### Custom-fields template
 
@@ -139,15 +148,16 @@ The **Audit Log** page lists all of this, newest first: timestamp, actor, action
 
 - **Audit log isn't scope-filtered.** An editor blocked from seeing a scoped instance in Search/Fleet/push panels can still see audit log entries that mention it by name. This is a deliberate scope-cut for this first pass, not an oversight — flagged here so it's a known gap rather than a surprise. Filtering it would follow the same `filter_scoped()` pattern already used elsewhere.
 - **"Diff preview" vs. "passive reporting" is a judgment call.** The spec that shaped this said Editor gets "diff previews" while Viewer gets read-only "Drift" — implemented as: the on-demand push-time diff preview (`diff-with-netbox`, custom-fields `/diff`) requires editor, while the Drift page's list and "Check now" stay viewer-accessible, since the spec explicitly named Drift as viewer-visible. Coverage checks (the per-device-type "which instances have this" button) are similarly left viewer-accessible, on the same reasoning.
-- **Role/scope changes take effect on the next request**, not retroactively on an already-open session — there's no server-side session invalidation, since the session cookie only carries identity/groups, not a cached role.
+- **Access-mapping changes take effect on the next request**, not retroactively inside a request already in flight — the session cookie carries identity/groups, not a cached role.
+- **Legacy RBAC tables remain read-only.** `role_mappings` and `scope_mappings` are retained rather than dropped so a downgrade can still use the original data.
+- **Changing a GitHub target's repo, branch, or paths does not move files.** Later reads and drift checks use the new location.
 
 ## Known limitations (pre-existing)
 
 - **No Alembic migrations, but schema changes are no longer destructive.** Tables are created with `Base.metadata.create_all()`, and on every startup `app/migrations.py` diffs each mapped table's actual columns against the models and adds anything missing (`ALTER TABLE ADD COLUMN`, with the model's default). It never removes, renames, or retypes a column — only adds — so pulling an update that adds a field no longer requires wiping the SQLite volume. A prior version of this README said otherwise; that's fixed now.
 - **Diff/drift now compares full attributes, not just name and type.** `get_existing_device_type()` fetches every field each component template schema actually defines (`maximum_draw`/`allocated_draw` on power ports, `power_port`/`feed_leg` on outlets, `positions` on rear ports, `rear_port`/`rear_port_position` on front ports, `position` on module bays, `poe_mode`/`poe_type` on interfaces, `description` everywhere), and the diff engine (`field_level_diff()`) reports exactly which fields differ on a changed item — e.g. `{"field": "maximum_draw", "source": 60, "existing": 30}` — instead of a bare "this item changed" flag. The same engine backs both device-type diffs and the custom-fields template diff.
 - **Drift detection has no explicit instance↔device-type mapping** — it infers candidate pairs from push history, so a device type that's only ever been pushed manually outside this tool won't be tracked.
-- **Authentication exists (OIDC), authorization doesn't yet** — every authenticated user has full access to every instance, target, and push action regardless of group. Group-based role/instance scoping is the planned next step (see the "Login (OIDC)" section above). Until then, run this only with an identity provider you trust to gate who gets an account at all.
-- **Don't run without `NBM_OIDC_ISSUER` set outside a trusted network** — with it unset, the API has no auth at all, by design (for local dev).
+- **Do not run with no authentication method outside a trusted development network.** A complete local-admin credential pair requires login even without OIDC; with neither OIDC nor local admin configured the API is deliberately open and logs a startup warning. Set `NBM_REQUIRE_AUTH=true` to fail closed.
 - **Audit log covers device-type actions only** — instance/GitHub-target CRUD and drift checks aren't currently logged with an actor. Extending the same `_log_action`-style pattern to those is straightforward if needed.
 - **NetBox token expiry detection is best-effort** — it relies on the token being able to see its own record via `/api/users/tokens/` and being the only one visible. Many tokens won't have permission to that endpoint at all (shows as "unknown"), which is expected, not a bug.
 - **Coverage checks are on-demand per device type**, not a pre-computed fleet-wide matrix — checking coverage for every device type in a large repo against every instance would mean N×M live NetBox calls; the per-row button keeps that cost opt-in.

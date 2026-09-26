@@ -26,6 +26,17 @@ class NetboxInstanceUpdate(BaseModel):
     requires_approved_pr: Optional[bool] = None
 
 
+class InstanceTestRequest(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+    api_token: Optional[str] = None
+    verify_ssl: Optional[bool] = None
+    description: Optional[str] = None
+    tags: Optional[list[str]] = None
+    requires_approved_pr: Optional[bool] = None
+
+
 class NetboxInstanceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -56,6 +67,25 @@ class GithubTargetCreate(BaseModel):
     path_pattern: str = "device-types/{manufacturer}/{slug}.yml"
     custom_fields_path: str = "custom-fields/template.yml"
     pat: str
+
+
+class GithubTargetUpdate(BaseModel):
+    name: Optional[str] = None
+    repo: Optional[str] = None
+    branch: Optional[str] = None
+    path_pattern: Optional[str] = None
+    custom_fields_path: Optional[str] = None
+    pat: Optional[str] = None
+
+
+class GithubTargetTestRequest(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    repo: Optional[str] = None
+    branch: Optional[str] = None
+    path_pattern: Optional[str] = None
+    custom_fields_path: Optional[str] = None
+    pat: Optional[str] = None
 
 
 class GithubTargetOut(BaseModel):
@@ -314,39 +344,37 @@ class SyslogTestResult(BaseModel):
 
 # ---------- Access control (RBAC) ----------
 
-class RoleMappingCreate(BaseModel):
+class LocalLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AccessMappingCreate(BaseModel):
     oidc_group: str
-    role: str  # "viewer" | "editor" | "admin"
+    role: Optional[str] = None
+    resource_type: str = "*"
+    resource_id: str = "*"
 
 
-class RoleMappingOut(BaseModel):
+class AccessMappingOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     oidc_group: str
-    role: str
-    created_at: datetime
-
-
-class ScopeMappingCreate(BaseModel):
-    oidc_group: str
-    resource_type: str  # "instance" | "github_target"
-    resource_id: str
-
-
-class ScopeMappingOut(BaseModel):
-    id: str
-    oidc_group: str
+    role: Optional[str] = None
     resource_type: str
     resource_id: str
     resource_name: str  # resolved for display, since the UI shouldn't have to cross-reference IDs itself
     created_at: datetime
+    updated_at: datetime
 
 
 class CurrentAccessOut(BaseModel):
     role: str
     groups: list[str]
     scoping_active: bool
+    app_admin: bool
+    editable: dict[str, list[str]]
 
 
 # ---------- Custom-fields template ----------

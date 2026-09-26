@@ -1,46 +1,102 @@
 import { useEffect, useState } from "react";
-import { instancesApi, NetboxInstance, NetboxInstanceCreate } from "../api/client";
+import {
+  accessApi, instancesApi, NetboxInstance, NetboxInstanceCreate, NetboxInstanceUpdate,
+} from "../api/client";
 import { useAccess } from "../contexts/AccessContext";
 
-function toCreatePayload(form: {
-  name: string; base_url: string; api_token: string; verify_ssl: boolean; description: string;
-  tags: string; requires_approved_pr: boolean;
-}): NetboxInstanceCreate {
+const EMPTY_FORM = {
+  name: "", base_url: "", api_token: "", verify_ssl: true, description: "", tags: "",
+  requires_approved_pr: false,
+};
+
+type InstanceForm = typeof EMPTY_FORM;
+
+function formPayload(form: InstanceForm): NetboxInstanceCreate {
   return {
     name: form.name,
     base_url: form.base_url,
     api_token: form.api_token,
     verify_ssl: form.verify_ssl,
     description: form.description || undefined,
-    tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
+    tags: form.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
     requires_approved_pr: form.requires_approved_pr,
   };
 }
 
 export default function InstancesPage() {
   const access = useAccess();
-  const isAdmin = access.can("admin");
   const [instances, setInstances] = useState<NetboxInstance[]>([]);
+  const [editableIds, setEditableIds] = useState<string[]>([]);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: "", base_url: "", api_token: "", verify_ssl: true, description: "", tags: "", requires_approved_pr: false });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<InstanceForm>(EMPTY_FORM);
   const [testResult, setTestResult] = useState<Record<string, { ok: boolean; detail?: string; version?: string }>>({});
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const load = () => instancesApi.list().then(setInstances);
+  const load = () => {
+    instancesApi.list().then(setInstances);
+    accessApi.me().then((result) => setEditableIds(result.editable.instance));
+  };
   useEffect(() => { load(); }, []);
 
-  const handleTestNew = async () => {
-    const result = await instancesApi.testNew(toCreatePayload(form));
-    setTestResult((r) => ({ ...r, __new__: { ok: result.ok, detail: result.detail, version: result.netbox_version } }));
+  const resetForm = () => {
+    setForm(EMPTY_FORM);
+    setEditingId(null);
+    setShowForm(false);
+    setError(null);
   };
 
-  const handleCreate = async () => {
-    setSaving(true);
+  const startEdit = (instance: NetboxInstance) => {
+    setEditingId(instance.id);
+    setForm({
+      name: instance.name,
+      base_url: instance.base_url,
+      api_token: "",
+      verify_ssl: instance.verify_ssl,
+      description: instance.description ?? "",
+      tags: instance.tags.join(", "),
+      requires_approved_pr: instance.requires_approved_pr,
+    });
+    setError(null);
+    setShowForm(true);
+  };
+
+  const handleTestForm = async () => {
+    setError(null);
     try {
-      await instancesApi.create(toCreatePayload(form));
-      setForm({ name: "", base_url: "", api_token: "", verify_ssl: true, description: "", tags: "", requires_approved_pr: false });
-      setShowForm(false);
+      const payload = formPayload(form);
+      const result = await instancesApi.testNew({
+        ...(editingId ? { id: editingId } : {}),
+        base_url: payload.base_url,
+        verify_ssl: payload.verify_ssl,
+        ...(payload.api_token ? { api_token: payload.api_token } : {}),
+      });
+      setTestResult((current) => ({
+        ...current,
+        __new__: { ok: result.ok, detail: result.detail, version: result.netbox_version },
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const payload = formPayload(form);
+      if (editingId) {
+        const update: NetboxInstanceUpdate = { ...payload };
+        if (!update.api_token) delete update.api_token;
+        await instancesApi.update(editingId, update);
+      } else {
+        await instancesApi.create(payload);
+      }
+      resetForm();
       load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
@@ -48,7 +104,10 @@ export default function InstancesPage() {
 
   const handleTestExisting = async (id: string) => {
     const result = await instancesApi.test(id);
-    setTestResult((r) => ({ ...r, [id]: { ok: result.ok, detail: result.detail, version: result.netbox_version } }));
+    setTestResult((current) => ({
+      ...current,
+      [id]: { ok: result.ok, detail: result.detail, version: result.netbox_version },
+    }));
   };
 
   const handleDelete = async (id: string) => {
@@ -57,64 +116,76 @@ export default function InstancesPage() {
     load();
   };
 
+  const canSave = Boolean(
+    form.name.trim() && form.base_url.trim() && (editingId || form.api_token.trim()),
+  );
+
   return (
     <div>
       <h1>NetBox Instances</h1>
       <p className="page-subtitle">Instances you can push device types to. Tokens are encrypted at rest and never shown again.</p>
 
       <div className="toolbar">
-        {isAdmin ? (
-          <button className="primary" onClick={() => setShowForm((s) => !s)}>
+        {access.appAdmin ? (
+          <button className="primary" onClick={() => showForm ? resetForm() : setShowForm(true)}>
             {showForm ? "Cancel" : "+ Add instance"}
           </button>
         ) : (
-          <span className="pill">Read-only — managing instances requires the admin role</span>
+          <span className="pill">Creating and removing instances requires app-level admin</span>
         )}
       </div>
 
       {showForm && (
         <div className="card">
-          <h2>New instance</h2>
+          <h2>{editingId ? `Edit instance — ${form.name}` : "New instance"}</h2>
           <div className="form-row">
             <label>Name</label>
-            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="prod-dc1" />
+            <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="prod-dc1" />
           </div>
           <div className="form-row">
             <label>Base URL</label>
-            <input value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder="https://netbox.example.com" />
+            <input value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} placeholder="https://netbox.example.com" />
           </div>
           <div className="form-row">
             <label>API Token</label>
-            <input type="password" className="mono" value={form.api_token} onChange={(e) => setForm({ ...form, api_token: e.target.value })} />
+            <input
+              type="password"
+              className="mono"
+              value={form.api_token}
+              onChange={(event) => setForm({ ...form, api_token: event.target.value })}
+              placeholder={editingId ? "leave empty to keep the current token" : ""}
+            />
           </div>
           <div className="form-row">
             <label>
               <input type="checkbox" style={{ width: "auto", marginRight: 6 }} checked={form.verify_ssl}
-                onChange={(e) => setForm({ ...form, verify_ssl: e.target.checked })} />
+                onChange={(event) => setForm({ ...form, verify_ssl: event.target.checked })} />
               Verify SSL certificate
             </label>
           </div>
           <div className="form-row">
             <label>Description (optional)</label>
-            <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+            <input value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
           </div>
           <div className="form-row">
             <label>Tags (comma-separated — e.g. "prod, region:eu")</label>
-            <input className="mono" value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="prod, region:eu" />
+            <input className="mono" value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="prod, region:eu" />
           </div>
           <div className="form-row">
             <label>
               <input type="checkbox" style={{ width: "auto", marginRight: 6 }} checked={form.requires_approved_pr}
-                onChange={(e) => setForm({ ...form, requires_approved_pr: e.target.checked })} />
+                onChange={(event) => setForm({ ...form, requires_approved_pr: event.target.checked })} />
               Require an approved, merged PR before pushing device types here
             </label>
           </div>
           <div className="toolbar">
-            <button onClick={handleTestNew}>Test connection</button>
-            <button className="primary" disabled={saving || !form.name || !form.base_url || !form.api_token} onClick={handleCreate}>
+            <button onClick={handleTestForm}>Test connection</button>
+            <button className="primary" disabled={saving || !canSave} onClick={handleSave}>
               {saving ? "Saving…" : "Save instance"}
             </button>
+            {editingId && <button onClick={resetForm}>Cancel</button>}
           </div>
+          {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
           {testResult.__new__ && (
             <p style={{ fontSize: 13 }}>
               <span className={`status-dot ${testResult.__new__.ok ? "status-ok" : "status-error"}`} />
@@ -129,40 +200,34 @@ export default function InstancesPage() {
       <div className="card">
         <table>
           <thead>
-            <tr>
-              <th>Name</th>
-              <th>Base URL</th>
-              <th>Tags</th>
-              <th>SSL</th>
-              <th>Approval</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
+            <tr><th>Name</th><th>Base URL</th><th>Tags</th><th>SSL</th><th>Approval</th><th>Status</th><th></th></tr>
           </thead>
           <tbody>
-            {instances.map((inst) => (
-              <tr key={inst.id}>
-                <td>{inst.name}</td>
-                <td className="mono">{inst.base_url}</td>
-                <td>{inst.tags.map((t) => <span key={t} className="pill" style={{ marginRight: 4 }}>{t}</span>)}</td>
-                <td>{inst.verify_ssl ? "verified" : "insecure"}</td>
-                <td>{inst.requires_approved_pr ? "🔒 required" : "—"}</td>
-                <td>
-                  {testResult[inst.id] ? (
-                    <span>
-                      <span className={`status-dot ${testResult[inst.id].ok ? "status-ok" : "status-error"}`} />
-                      {testResult[inst.id].ok ? `v${testResult[inst.id].version}` : "unreachable"}
-                    </span>
-                  ) : (
-                    <span className="pill">not tested</span>
-                  )}
-                </td>
-                <td>
-                  <button onClick={() => handleTestExisting(inst.id)}>Test</button>{" "}
-                  {isAdmin && <button className="danger" onClick={() => handleDelete(inst.id)}>Remove</button>}
-                </td>
-              </tr>
-            ))}
+            {instances.map((instance) => {
+              const editable = access.appAdmin || editableIds.includes(instance.id);
+              return (
+                <tr key={instance.id}>
+                  <td>{instance.name}</td>
+                  <td className="mono">{instance.base_url}</td>
+                  <td>{instance.tags.map((tag) => <span key={tag} className="pill" style={{ marginRight: 4 }}>{tag}</span>)}</td>
+                  <td>{instance.verify_ssl ? "verified" : "insecure"}</td>
+                  <td>{instance.requires_approved_pr ? "🔒 required" : "—"}</td>
+                  <td>
+                    {testResult[instance.id] ? (
+                      <span>
+                        <span className={`status-dot ${testResult[instance.id].ok ? "status-ok" : "status-error"}`} />
+                        {testResult[instance.id].ok ? `v${testResult[instance.id].version}` : "unreachable"}
+                      </span>
+                    ) : <span className="pill">not tested</span>}
+                  </td>
+                  <td>
+                    <button onClick={() => handleTestExisting(instance.id)}>Test</button>{" "}
+                    {editable && <button onClick={() => startEdit(instance)}>Edit</button>}{" "}
+                    {access.appAdmin && <button className="danger" onClick={() => handleDelete(instance.id)}>Remove</button>}
+                  </td>
+                </tr>
+              );
+            })}
             {instances.length === 0 && (
               <tr><td colSpan={7} style={{ color: "var(--muted)" }}>No instances yet.</td></tr>
             )}

@@ -5,15 +5,16 @@ const ROLE_ORDER: Record<Role, number> = { viewer: 0, editor: 1, admin: 2 };
 
 export interface AccessValue {
   role: Role;
+  appAdmin: boolean;
   can: (minimum: Role) => boolean;
 }
 
-export const AccessContext = createContext<AccessValue>({ role: "admin", can: () => true });
+export const AccessContext = createContext<AccessValue>({ role: "admin", appAdmin: true, can: () => true });
 
 export function useAccess(): AccessValue {
   return useContext(AccessContext);
 }
 
-export function makeAccessValue(role: Role): AccessValue {
-  return { role, can: (minimum: Role) => ROLE_ORDER[role] >= ROLE_ORDER[minimum] };
+export function makeAccessValue(role: Role, appAdmin: boolean): AccessValue {
+  return { role, appAdmin, can: (minimum: Role) => ROLE_ORDER[role] >= ROLE_ORDER[minimum] };
 }

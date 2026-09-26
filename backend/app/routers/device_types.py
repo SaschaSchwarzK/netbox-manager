@@ -10,7 +10,7 @@ from app import crypto, models, schemas
 from app.auth import get_current_actor
 from app.database import get_db
 from app.devicetype_schema import DeviceType
-from app.rbac import AccessContext, filter_scoped, get_access_context, has_role_at_least, require_role
+from app.rbac import AccessContext, get_access_context, has_role_at_least, require_role, require_visible, role_for_resource
 from app.services import diff as diff_mod
 from app.services import github_repo, netbox_client
 from app.services.github_repo import RepoAccessError
@@ -22,9 +22,8 @@ def _get_target(target_id: str, db: Session, ctx: AccessContext | None = None) -
     target = db.get(models.GithubTarget, target_id)
     if not target:
         raise HTTPException(404, "GitHub target not found.")
-    if ctx is not None and filter_scoped([target], "github_target", ctx, db) == []:
-        # 404, not 403: a scoped-out target shouldn't even confirm its own existence to this user.
-        raise HTTPException(404, "GitHub target not found.")
+    if ctx is not None:
+        require_visible("github_target", target_id, ctx, db)
     return target
 
 
@@ -558,7 +557,7 @@ def push_to_netbox(
     results = []
     for instance in instances:
         if instance.requires_approved_pr:
-            if not has_role_at_least(ctx.role, "admin"):
+            if not has_role_at_least(role_for_resource(ctx, "instance", instance.id), "admin"):
                 detail = "Blocked: this instance requires the admin role to push to (it's flagged 'requires an approved PR')."
                 results.append(schemas.PushResultItem(target=instance.name, status="error", detail=detail))
                 db.add(models.DeviceTypePushHistory(

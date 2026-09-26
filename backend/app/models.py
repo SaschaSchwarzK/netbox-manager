@@ -11,8 +11,16 @@ def gen_uuid() -> str:
     return str(uuid.uuid4())
 
 
+SCOPE_ALL = "*"
+RESOURCE_TYPES = ("*", "instance", "github_target")
+
+
 class RoleMapping(Base):
-    """Maps an OIDC group to an app role. A user's effective role is the highest role among all their groups."""
+    """LEGACY (read-only, no longer written to; still read once by app/rbac_migration.py).
+
+    Maps an OIDC group to an app role. A user's effective role is the highest role among all
+    their groups.
+    """
     __tablename__ = "role_mappings"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
@@ -22,7 +30,8 @@ class RoleMapping(Base):
 
 
 class ScopeMapping(Base):
-    """
+    """LEGACY (read-only, no longer written to; still read once by app/rbac_migration.py).
+
     Maps an OIDC group to a specific instance/GitHub target it can see and act on.
     A resource with zero scope mappings is visible to everyone (opt-in restriction,
     not opt-out) — see app/rbac.py.
@@ -35,6 +44,40 @@ class ScopeMapping(Base):
     resource_type: Mapped[str] = mapped_column(String(32), nullable=False)  # "instance" | "github_target"
     resource_id: Mapped[str] = mapped_column(String(36), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AccessMapping(Base):
+    """One row = one OIDC group -> (role, scope) grant.
+
+    resource_type/resource_id == "*" means the grant applies to every resource ("global").
+    role may be NULL for a visibility-only grant: the group may see the resource but gains no
+    role from this row (it keeps the app default role). Legacy RoleMapping/ScopeMapping rows are
+    expanded into this table once at startup — see app/rbac_migration.py.
+    """
+    __tablename__ = "access_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "oidc_group", "resource_type", "resource_id", name="uq_access_mapping"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    oidc_group: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    resource_type: Mapped[str] = mapped_column(String(32), nullable=False, default=SCOPE_ALL)
+    resource_id: Mapped[str] = mapped_column(String(36), nullable=False, default=SCOPE_ALL)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class DataMigration(Base):
+    """One-time data backfills already applied to this database (see app/rbac_migration.py)."""
+    __tablename__ = "data_migrations"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    applied_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class SeenOidcGroup(Base):

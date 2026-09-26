@@ -12,6 +12,8 @@ router's purpose, base prefix, and its endpoints.
 - [7. Instances](#7-instances)
 - [8. Search](#8-search)
 - [9. Syslog](#9-syslog)
+- [10. Access](#10-access)
+- [11. GitHub Targets](#11-github-targets)
 
 ---
 
@@ -48,8 +50,8 @@ history (`models.DeviceTypePushHistory`).
 **File:** `backend/app/routers/auth.py`
 **Prefix:** `/api/auth` | **Tag:** `auth`
 
-OIDC (OpenID Connect) login flow for the application, backed by Authlib's `oauth`
-provider. Session authentication is a server-side cookie (`SESSION_COOKIE`);
+OIDC (OpenID Connect) and break-glass local-admin login flows. Session authentication
+uses a signed HttpOnly cookie (`SESSION_COOKIE`);
 actor attribution for write endpoints comes from the session cookie via
 `get_current_actor` / `get_current_user_optional`.
 
@@ -59,6 +61,7 @@ actor attribution for write endpoints comes from the session cookie via
 |--------|------|---------|
 | GET | `/api/auth/login` | Redirect to OIDC authorization endpoint |
 | GET | `/api/auth/callback` | OIDC redirect back; validate token, create session, redirect home |
+| POST | `/api/auth/local-login` | Authenticate the configured break-glass local administrator |
 | POST | `/api/auth/logout` | Clear the session cookie |
 | GET | `/api/auth/me` | Current user / auth status |
 
@@ -88,11 +91,22 @@ actor attribution for write endpoints comes from the session cookie via
 
 - Deletes the session cookie; returns `{"ok": true}`.
 
+**`POST /api/auth/local-login`**
+
+- Payload: `{"username": "...", "password": "..."}`.
+- Returns 403 when the complete `NBM_LOCAL_ADMIN_USER` / `NBM_LOCAL_ADMIN_PASSWORD`
+  pair is not configured, 401 for invalid credentials, and 429 with `Retry-After`
+  after ten failures from one client within five minutes.
+- Success returns the local user and `role: "admin"`, sets the standard signed session
+  cookie, and clears that client's failure window. The throttle is in-process; the
+  supplied Docker deployment runs one Uvicorn process.
+
 **`GET /api/auth/me`**
 
-- Returns:
-  - OIDC disabled: `{"auth_enabled": false, "authenticated": true, "user": null}`
-  - OIDC enabled: `{"auth_enabled": true, "authenticated": <bool>, "user": <dict|null>}`
+- Returns `auth_enabled`, `oidc_enabled`, `local_login_enabled`, `authenticated`,
+  `user`, `role`, and `app_admin`. `auth_enabled` means at least one configured method
+  requires a session. With no method configured, the development-mode response is
+  authenticated with the implicit admin context.
 
 ---
 
@@ -535,25 +549,27 @@ stored encrypted via `crypto.encrypt` and **never** returned in the
 
 - Path param `instance_id` (string). 404 "Instance not found." if the row
   doesn't exist.
+- Requires app-admin or an admin access mapping on that visible instance. A scoped-out
+  instance returns 404; insufficient role returns 403.
 - Payload: `NetboxInstanceUpdate` (all fields optional). Any provided field
   is applied:
   - `name`
   - `base_url` (again `rstrip("/")`)
-  - `api_token` (re-encrypted into `api_token_encrypted`)
+  - non-blank `api_token` (re-encrypted); blank or omitted keeps the stored token
   - `verify_ssl`
   - `description`
   - `tags`
   - `requires_approved_pr`
-- Commits, refreshes, returns the updated row.
+- Empty names/base URLs and duplicate names return 400. Commits, refreshes, and returns the updated row.
 
 **`DELETE /api/instances/{instance_id}`** (204)
 
-- 404 "Instance not found." if missing.
-- Deletes the row, commits; no body returned.
+- Requires app-level admin. 404 "Instance not found." if missing.
+- Deletes the row and its unified/legacy scope rows, commits; no body returned.
 
 **`POST /api/instances/{instance_id}/test`** — `ConnectionTestResult`
 
-- 404 if the instance doesn't exist.
+- 404 if the instance doesn't exist or is outside the caller's scope.
 - Decrypts the stored `api_token_encrypted`.
 - Calls `netbox_client.test_connection(base_url, token, verify_ssl)`, which
   GETs `{base_url}/api/status/` with `Authorization: Token {token}`
@@ -564,9 +580,10 @@ stored encrypted via `crypto.encrypt` and **never** returned in the
 
 **`POST /api/instances/test`** — `ConnectionTestResult`
 
-- Tests a connection **before** saving — used by the "Add instance" form.
-- Payload: `NetboxInstanceCreate` (uses `base_url` `rstrip("/")`, the raw
-  `api_token` from the form, and `verify_ssl`).
+- Payload: `InstanceTestRequest`, whose fields are optional and which may include `id`.
+  Without `id`, app-level admin and a non-blank API token are required. With `id`, the
+  caller needs resource-admin rights; omitted URL/SSL values and a blank token reuse the
+  stored instance settings.
 - Same `netbox_client.test_connection` behavior as above
   (returns `ok`/`netbox_version`/`detail`).
 
@@ -740,6 +757,57 @@ hook on `DeviceTypePushHistory`)
   `action_type` truncated to 32 chars (default `audit`).
 - Structured-data values: `None` → `-`, and `\`, `"`, `]` are escaped.
 - The free-text `detail` is the MSG part of the message.
+
+---
+
+## 10. Access
+
+**File:** `backend/app/routers/access.py`
+**Prefix:** `/api/access` | **Tag:** `access`
+
+Unified OIDC group mappings. One row grants a nullable role and either the global
+`("*", "*")` scope or one concrete instance/GitHub-target scope. Concrete rows also
+participate in opt-in visibility; global rows never reveal a concretely scoped resource.
+
+| Method | Path | Summary |
+|--------|------|---------|
+| GET | `/api/access/me` | Current role, groups, app-admin flag, and editable resource IDs |
+| GET | `/api/access/known-groups` | Observed and mapped OIDC group names |
+| GET | `/api/access/mappings` | List access mappings |
+| POST | `/api/access/mappings` | Create an access mapping (201) |
+| PATCH | `/api/access/mappings/{mapping_id}` | Replace an access mapping |
+| DELETE | `/api/access/mappings/{mapping_id}` | Delete an access mapping (204) |
+
+Mapping management and known-group discovery require app-level admin: a bootstrap admin
+group, a global admin mapping, or auth-disabled/local-admin mode. `role` must be null or
+`viewer`/`editor`/`admin`; `resource_type` must be `*`, `instance`, or `github_target`.
+Global scope forces `resource_id="*"`. Concrete IDs must exist (404 otherwise), and a group
+may have only one row per scope (duplicate requests return 400). A null role is a
+visibility-only grant.
+
+---
+
+## 11. GitHub Targets
+
+**File:** `backend/app/routers/github.py`
+**Prefix:** `/api/github-targets` | **Tag:** `github`
+
+| Method | Path | Summary |
+|--------|------|---------|
+| GET | `/api/github-targets` | List visible targets |
+| POST | `/api/github-targets` | Create a target (201) |
+| PATCH | `/api/github-targets/{target_id}` | Update a target |
+| DELETE | `/api/github-targets/{target_id}` | Delete a target (204) |
+| POST | `/api/github-targets/test` | Test new or edited settings |
+| POST | `/api/github-targets/{target_id}/test` | Test the stored target |
+
+Create/delete require app-level admin. Update requires app admin or a scoped admin mapping
+for that visible target. Updates reject empty names/branches, duplicate names, and repositories
+outside `owner/repo` form; a blank/omitted PAT preserves the encrypted PAT. Deletion also
+removes unified and legacy scope rows for the target.
+
+The new-settings test accepts optional fields plus optional `id`. Without `id`, app-admin and
+repo/branch/PAT are required. With `id`, the caller needs resource-admin rights and omitted
+values (including a blank PAT) fall back to the stored target. The stored-target test is
+available to any caller who can see the target; scoped-out/missing targets return 404.
 ~~~
-
-

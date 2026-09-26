@@ -24,52 +24,57 @@ export interface AuthUser {
 
 export interface AuthMeResponse {
   auth_enabled: boolean;
+  oidc_enabled: boolean;
+  local_login_enabled: boolean;
   authenticated: boolean;
   user: AuthUser | null;
   role: "viewer" | "editor" | "admin";
+  app_admin: boolean;
 }
 
 export const authApi = {
   me: () => request<AuthMeResponse>("/auth/me"),
+  localLogin: (username: string, password: string) =>
+    request<{ ok: boolean; user: AuthUser; role: Role }>("/auth/local-login", {
+      method: "POST", body: JSON.stringify({ username, password }),
+    }),
   logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
 };
 
 // ---------- Access control (RBAC) ----------
 
 export type Role = "viewer" | "editor" | "admin";
+export type ScopeType = "all" | "instance" | "github_target";
+export const SCOPE_ALL = "*";
 
-export interface RoleMapping {
+export interface AccessMapping {
   id: string;
   oidc_group: string;
-  role: Role;
-  created_at: string;
-}
-
-export interface ScopeMapping {
-  id: string;
-  oidc_group: string;
-  resource_type: "instance" | "github_target";
+  role: Role | null;
+  resource_type: "*" | "instance" | "github_target";
   resource_id: string;
   resource_name: string;
   created_at: string;
+  updated_at: string;
 }
 
+export type AccessMappingInput = Pick<AccessMapping, "oidc_group" | "role" | "resource_type" | "resource_id">;
+
 export const accessApi = {
+  me: () => request<{
+    role: Role;
+    groups: string[];
+    scoping_active: boolean;
+    app_admin: boolean;
+    editable: { instance: string[]; github_target: string[] };
+  }>("/access/me"),
   knownGroups: () => request<string[]>("/access/known-groups"),
-
-  listRoleMappings: () => request<RoleMapping[]>("/access/role-mappings"),
-  createRoleMapping: (oidc_group: string, role: Role) =>
-    request<RoleMapping>("/access/role-mappings", { method: "POST", body: JSON.stringify({ oidc_group, role }) }),
-  updateRoleMapping: (id: string, oidc_group: string, role: Role) =>
-    request<RoleMapping>(`/access/role-mappings/${id}`, { method: "PATCH", body: JSON.stringify({ oidc_group, role }) }),
-  deleteRoleMapping: (id: string) => request<void>(`/access/role-mappings/${id}`, { method: "DELETE" }),
-
-  listScopeMappings: () => request<ScopeMapping[]>("/access/scope-mappings"),
-  createScopeMapping: (oidc_group: string, resource_type: "instance" | "github_target", resource_id: string) =>
-    request<ScopeMapping>("/access/scope-mappings", {
-      method: "POST", body: JSON.stringify({ oidc_group, resource_type, resource_id }),
-    }),
-  deleteScopeMapping: (id: string) => request<void>(`/access/scope-mappings/${id}`, { method: "DELETE" }),
+  listMappings: () => request<AccessMapping[]>("/access/mappings"),
+  createMapping: (data: AccessMappingInput) =>
+    request<AccessMapping>("/access/mappings", { method: "POST", body: JSON.stringify(data) }),
+  updateMapping: (id: string, data: AccessMappingInput) =>
+    request<AccessMapping>(`/access/mappings/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteMapping: (id: string) => request<void>(`/access/mappings/${id}`, { method: "DELETE" }),
 };
 
 // ---------- Instances ----------
@@ -96,17 +101,27 @@ export interface NetboxInstanceCreate {
   requires_approved_pr?: boolean;
 }
 
+export interface NetboxInstanceUpdate {
+  name?: string;
+  base_url?: string;
+  api_token?: string;
+  verify_ssl?: boolean;
+  description?: string;
+  tags?: string[];
+  requires_approved_pr?: boolean;
+}
+
 export const instancesApi = {
   list: () => request<NetboxInstance[]>("/instances"),
   create: (data: NetboxInstanceCreate) =>
     request<NetboxInstance>("/instances", { method: "POST", body: JSON.stringify(data) }),
-  update: (id: string, data: Partial<NetboxInstanceCreate>) =>
+  update: (id: string, data: NetboxInstanceUpdate) =>
     request<NetboxInstance>(`/instances/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   remove: (id: string) => request<void>(`/instances/${id}`, { method: "DELETE" }),
   test: (id: string) => request<{ ok: boolean; netbox_version?: string; detail?: string }>(
     `/instances/${id}/test`, { method: "POST" }
   ),
-  testNew: (data: NetboxInstanceCreate) => request<{ ok: boolean; netbox_version?: string; detail?: string }>(
+  testNew: (data: NetboxInstanceUpdate & { id?: string }) => request<{ ok: boolean; netbox_version?: string; detail?: string }>(
     "/instances/test", { method: "POST", body: JSON.stringify(data) }
   ),
 };
@@ -132,12 +147,23 @@ export interface GithubTargetCreate {
   pat: string;
 }
 
+export interface GithubTargetUpdate {
+  name?: string;
+  repo?: string;
+  branch?: string;
+  path_pattern?: string;
+  custom_fields_path?: string;
+  pat?: string;
+}
+
 export const githubApi = {
   list: () => request<GithubTarget[]>("/github-targets"),
   create: (data: GithubTargetCreate) =>
     request<GithubTarget>("/github-targets", { method: "POST", body: JSON.stringify(data) }),
+  update: (id: string, data: GithubTargetUpdate) =>
+    request<GithubTarget>(`/github-targets/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   remove: (id: string) => request<void>(`/github-targets/${id}`, { method: "DELETE" }),
-  testNew: (data: GithubTargetCreate) => request<{ ok: boolean; detail?: string }>(
+  testNew: (data: GithubTargetUpdate & { id?: string }) => request<{ ok: boolean; detail?: string }>(
     "/github-targets/test", { method: "POST", body: JSON.stringify(data) }
   ),
   test: (id: string) => request<{ ok: boolean; detail?: string }>(
