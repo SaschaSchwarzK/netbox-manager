@@ -104,6 +104,15 @@ The audit log can be forwarded to a remote syslog server as structured **RFC 542
 - A syslog delivery failure (unreachable host, connection refused) never breaks the actual audit-log write or the request that triggered it — it's caught and silently dropped for the automatic path, while the test-button path surfaces the real error so misconfiguration is visible when you're deliberately checking it.
 - TCP framing is newline-delimited (RFC 6587 "non-transparent framing"), which is what most syslog receivers (rsyslog, syslog-ng) expect out of the box.
 
+### Access control (roles & scoping)
+
+Two independent mappings, managed from the **Access Control** page (admin-only):
+
+- **Role** (`oidc_group -> viewer/editor/admin`) — gates *actions*. A user in multiple mapped groups gets the highest role among them. Viewer is read-only everywhere (Search, Fleet, Drift, Audit Log, viewing device-type/custom-field templates and their YAML). Editor adds creating/saving device-types and custom-fields templates, importing from NetBox, diff previews, and pushing to instances that *aren't* flagged `requires_approved_pr`. Admin adds managing NetBox instances, GitHub targets, the mappings themselves, and pushing to `requires_approved_pr`-flagged instances — enforced per-instance inside the push loop itself, not just at the route level, so a batch push to five instances can allow four and block the fifth. An authenticated user in no mapped group gets `NBM_DEFAULT_ROLE` (default `viewer`).
+- **Scope** (`oidc_group -> specific instance or GitHub target`) — gates *visibility*. Opt-in per resource: an instance/target with zero scope mappings stays visible to everyone; the first mapping added for it switches it to "only these groups." Enforced server-side (in `filter_scoped()`, applied to the instance/target list endpoints, Search, Fleet, and the shared `_resolve_instances()` helper used by every push/diff endpoint) — a scoped-out instance can't be targeted even by explicit ID in a raw API call, not just hidden from the UI.
+- **Bootstrapping**: `NBM_BOOTSTRAP_ADMIN_GROUPS` (comma-separated) always resolves to admin regardless of the role_mappings table. This isn't a one-time setup step — leave it set permanently. Without it, nobody could ever create the first role mapping, since doing that itself requires already being admin.
+- When OIDC isn't configured at all, every request resolves to role `admin` with scoping skipped entirely, consistent with how auth itself behaves in that mode.
+
 ### Custom-fields template
 
 A second GitHub-backed workflow, parallel to device-types: a single YAML file per repo (`custom_fields_path` on the GitHub target, default `custom-fields/template.yml`, in its own folder separate from device-types) listing every custom field and custom field choice set that should exist across the fleet.
@@ -127,6 +136,12 @@ Because every GitHub commit in this app goes through one shared PAT, GitHub's ow
 The **Audit Log** page lists all of this, newest first: timestamp, actor, action type (GitHub save vs. NetBox push), target, device-type path, status, and detail.
 
 ## Known limitations
+
+- **Audit log isn't scope-filtered.** An editor blocked from seeing a scoped instance in Search/Fleet/push panels can still see audit log entries that mention it by name. This is a deliberate scope-cut for this first pass, not an oversight — flagged here so it's a known gap rather than a surprise. Filtering it would follow the same `filter_scoped()` pattern already used elsewhere.
+- **"Diff preview" vs. "passive reporting" is a judgment call.** The spec that shaped this said Editor gets "diff previews" while Viewer gets read-only "Drift" — implemented as: the on-demand push-time diff preview (`diff-with-netbox`, custom-fields `/diff`) requires editor, while the Drift page's list and "Check now" stay viewer-accessible, since the spec explicitly named Drift as viewer-visible. Coverage checks (the per-device-type "which instances have this" button) are similarly left viewer-accessible, on the same reasoning.
+- **Role/scope changes take effect on the next request**, not retroactively on an already-open session — there's no server-side session invalidation, since the session cookie only carries identity/groups, not a cached role.
+
+## Known limitations (pre-existing)
 
 - **No Alembic migrations, but schema changes are no longer destructive.** Tables are created with `Base.metadata.create_all()`, and on every startup `app/migrations.py` diffs each mapped table's actual columns against the models and adds anything missing (`ALTER TABLE ADD COLUMN`, with the model's default). It never removes, renames, or retypes a column — only adds — so pulling an update that adds a field no longer requires wiping the SQLite volume. A prior version of this README said otherwise; that's fixed now.
 - **Diff/drift now compares full attributes, not just name and type.** `get_existing_device_type()` fetches every field each component template schema actually defines (`maximum_draw`/`allocated_draw` on power ports, `power_port`/`feed_leg` on outlets, `positions` on rear ports, `rear_port`/`rear_port_position` on front ports, `position` on module bays, `poe_mode`/`poe_type` on interfaces, `description` everywhere), and the diff engine (`field_level_diff()`) reports exactly which fields differ on a changed item — e.g. `{"field": "maximum_draw", "source": 60, "existing": 30}` — instead of a bare "this item changed" flag. The same engine backs both device-type diffs and the custom-fields template diff.

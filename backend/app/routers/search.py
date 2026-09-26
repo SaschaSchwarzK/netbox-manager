@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app import crypto, models, schemas
 from app.database import get_db
+from app.rbac import AccessContext, filter_scoped, get_access_context
 from app.services import netbox_client
 
 router = APIRouter(prefix="/api/search", tags=["search"])
@@ -15,8 +16,10 @@ def search(
     query: str = Query(..., min_length=1),
     instance_ids: list[str] | None = Query(None),
     db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
 ):
     instances = db.query(models.NetboxInstance).all()
+    instances = filter_scoped(instances, "instance", ctx, db)
     if instance_ids:
         wanted = set(instance_ids)
         instances = [i for i in instances if i.id in wanted]

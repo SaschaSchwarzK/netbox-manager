@@ -1,8 +1,14 @@
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from datetime import datetime
 
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy.orm import Session
+
+from app import models
 from app.auth import SESSION_COOKIE, SESSION_MAX_AGE, create_session_cookie, get_current_user_optional, oauth
 from app.config import settings
+from app.database import get_db
+from app.rbac import get_access_context, AccessContext
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -15,7 +21,7 @@ async def login(request: Request):
 
 
 @router.get("/callback")
-async def callback(request: Request):
+async def callback(request: Request, db: Session = Depends(get_db)):
     if not oauth:
         raise HTTPException(503, "OIDC is not configured on this server.")
     try:
@@ -30,6 +36,14 @@ async def callback(request: Request):
     groups = userinfo.get(settings.oidc_groups_claim, [])
     if isinstance(groups, str):
         groups = [groups]
+
+    for g in groups:
+        seen = db.get(models.SeenOidcGroup, g)
+        if seen:
+            seen.last_seen_at = datetime.utcnow()
+        else:
+            db.add(models.SeenOidcGroup(name=g))
+    db.commit()
 
     user = {
         "sub": userinfo.get("sub"),
@@ -58,8 +72,8 @@ async def logout():
 
 
 @router.get("/me")
-async def me(request: Request):
+async def me(request: Request, ctx: AccessContext = Depends(get_access_context)):
     if not oauth:
-        return {"auth_enabled": False, "authenticated": True, "user": None}
+        return {"auth_enabled": False, "authenticated": True, "user": None, "role": ctx.role}
     user = get_current_user_optional(request)
-    return {"auth_enabled": True, "authenticated": user is not None, "user": user}
+    return {"auth_enabled": True, "authenticated": user is not None, "user": user, "role": ctx.role}

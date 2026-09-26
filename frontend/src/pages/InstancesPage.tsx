@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { instancesApi, NetboxInstance, NetboxInstanceCreate } from "../api/client";
+import { useAccess } from "../contexts/AccessContext";
 
 function toCreatePayload(form: {
   name: string; base_url: string; api_token: string; verify_ssl: boolean; description: string;
@@ -17,6 +18,8 @@ function toCreatePayload(form: {
 }
 
 export default function InstancesPage() {
+  const access = useAccess();
+  const isAdmin = access.can("admin");
   const [instances, setInstances] = useState<NetboxInstance[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: "", base_url: "", api_token: "", verify_ssl: true, description: "", tags: "", requires_approved_pr: false });
@@ -60,9 +63,13 @@ export default function InstancesPage() {
       <p className="page-subtitle">Instances you can push device types to. Tokens are encrypted at rest and never shown again.</p>
 
       <div className="toolbar">
-        <button className="primary" onClick={() => setShowForm((s) => !s)}>
-          {showForm ? "Cancel" : "+ Add instance"}
-        </button>
+        {isAdmin ? (
+          <button className="primary" onClick={() => setShowForm((s) => !s)}>
+            {showForm ? "Cancel" : "+ Add instance"}
+          </button>
+        ) : (
+          <span className="pill">Read-only — managing instances requires the admin role</span>
+        )}
       </div>
 
       {showForm && (
@@ -152,7 +159,7 @@ export default function InstancesPage() {
                 </td>
                 <td>
                   <button onClick={() => handleTestExisting(inst.id)}>Test</button>{" "}
-                  <button className="danger" onClick={() => handleDelete(inst.id)}>Remove</button>
+                  {isAdmin && <button className="danger" onClick={() => handleDelete(inst.id)}>Remove</button>}
                 </td>
               </tr>
             ))}

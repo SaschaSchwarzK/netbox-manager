@@ -7,6 +7,7 @@ from app import crypto, models, schemas
 from app.auth import get_current_actor
 from app.customfield_schema import CustomFieldsTemplate
 from app.database import get_db
+from app.rbac import AccessContext, filter_scoped, get_access_context, has_role_at_least, require_role
 from app.routers.device_types import _get_target, _github_error_to_http, _log_action, _resolve_instances, _with_actor_trailer
 from app.services import diff as diff_mod
 from app.services import github_repo, netbox_customfields
@@ -15,8 +16,8 @@ router = APIRouter(prefix="/api/repos/{target_id}/custom-fields", tags=["custom-
 
 
 @router.get("/file", response_model=schemas.CustomFieldsTemplateOut)
-def get_template(target_id: str, db: Session = Depends(get_db)):
-    target = _get_target(target_id, db)
+def get_template(target_id: str, db: Session = Depends(get_db), ctx: AccessContext = Depends(get_access_context)):
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     path = target.custom_fields_path
 
@@ -42,8 +43,11 @@ def get_template(target_id: str, db: Session = Depends(get_db)):
 
 
 @router.put("/file", response_model=schemas.SaveResult)
-def save_template(target_id: str, payload: schemas.SaveCustomFieldsRequest, request: Request, db: Session = Depends(get_db)):
-    target = _get_target(target_id, db)
+def save_template(
+    target_id: str, payload: schemas.SaveCustomFieldsRequest, request: Request, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     actor = get_current_actor(request)
     path = target.custom_fields_path
@@ -77,7 +81,10 @@ def save_template(target_id: str, payload: schemas.SaveCustomFieldsRequest, requ
 
 
 @router.post("/import-scan", response_model=schemas.CustomFieldsImportScanResult)
-def import_scan(target_id: str, payload: schemas.CustomFieldsImportScanRequest, db: Session = Depends(get_db)):
+def import_scan(
+    target_id: str, payload: schemas.CustomFieldsImportScanRequest, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
     """
     Compares a NetBox instance's custom fields/choice sets against the current
     template and returns only what's missing from the template or differs from
@@ -86,9 +93,9 @@ def import_scan(target_id: str, payload: schemas.CustomFieldsImportScanRequest, 
     its "extra_on_instance" (not in template) and "changed" lists as import
     candidates instead of as drift to flag.
     """
-    target = _get_target(target_id, db)
+    target = _get_target(target_id, db, ctx)
     instance = db.get(models.NetboxInstance, payload.instance_id)
-    if not instance:
+    if not instance or not filter_scoped([instance], "instance", ctx, db):
         raise HTTPException(404, "NetBox instance not found.")
 
     pat = crypto.decrypt(target.pat_encrypted)
@@ -132,7 +139,10 @@ def import_scan(target_id: str, payload: schemas.CustomFieldsImportScanRequest, 
 
 
 @router.post("/import", response_model=schemas.SaveResult, status_code=201)
-def import_from_instance(target_id: str, payload: schemas.ImportCustomFieldsSelectionRequest, request: Request, db: Session = Depends(get_db)):
+def import_from_instance(
+    target_id: str, payload: schemas.ImportCustomFieldsSelectionRequest, request: Request, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
     """
     Merges only the selected custom fields/choice sets into the existing
     template (added if missing, replaced if they differ) and saves that as a
@@ -141,9 +151,9 @@ def import_from_instance(target_id: str, payload: schemas.ImportCustomFieldsSele
     here rather than trusting whatever the scan step returned, since either
     could have changed between scanning and importing.
     """
-    target = _get_target(target_id, db)
+    target = _get_target(target_id, db, ctx)
     instance = db.get(models.NetboxInstance, payload.instance_id)
-    if not instance:
+    if not instance or not filter_scoped([instance], "instance", ctx, db):
         raise HTTPException(404, "NetBox instance not found.")
     if not payload.selected:
         raise HTTPException(400, "No custom fields or choice sets selected to import.")
@@ -217,8 +227,11 @@ def import_from_instance(target_id: str, payload: schemas.ImportCustomFieldsSele
 
 
 @router.post("/push", response_model=list[schemas.PushResultItem])
-def push_to_instances(target_id: str, payload: schemas.PushCustomFieldsRequest, request: Request, db: Session = Depends(get_db)):
-    target = _get_target(target_id, db)
+def push_to_instances(
+    target_id: str, payload: schemas.PushCustomFieldsRequest, request: Request, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     actor = get_current_actor(request)
     path = target.custom_fields_path
@@ -228,13 +241,22 @@ def push_to_instances(target_id: str, payload: schemas.PushCustomFieldsRequest, 
     except Exception as exc:
         raise _github_error_to_http(exc)
 
-    instances = _resolve_instances(db, payload.instance_ids, payload.tags)
+    instances = _resolve_instances(db, payload.instance_ids, payload.tags, ctx)
     if not instances:
         raise HTTPException(400, "No matching NetBox instances (check instance_ids/tags).")
 
     results = []
     for instance in instances:
         if instance.requires_approved_pr:
+            if not has_role_at_least(ctx.role, "admin"):
+                detail = "Blocked: this instance requires the admin role to push to (it's flagged 'requires an approved PR')."
+                results.append(schemas.PushResultItem(target=instance.name, status="error", detail=detail))
+                db.add(models.DeviceTypePushHistory(
+                    repo_target_id=target_id, file_path=path, target_type="netbox", target_name=instance.name,
+                    status="error", detail=detail,
+                    actor_sub=actor.get("sub"), actor_name=actor.get("name"), actor_email=actor.get("email"),
+                ))
+                continue
             try:
                 approval = github_repo.get_merged_pr_approval(pat, target.repo, target.branch, path)
             except Exception as exc:
@@ -271,12 +293,15 @@ def push_to_instances(target_id: str, payload: schemas.PushCustomFieldsRequest, 
 
 
 @router.post("/diff", response_model=list[schemas.InstanceCustomFieldsDiffResult])
-def diff_with_instances(target_id: str, payload: schemas.PushCustomFieldsRequest, db: Session = Depends(get_db)):
+def diff_with_instances(
+    target_id: str, payload: schemas.PushCustomFieldsRequest, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
     """
     Drift check: for each selected instance, what's in the template but
     missing there, what's there but not in the template, and what's changed.
     """
-    target = _get_target(target_id, db)
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     path = target.custom_fields_path
     try:
@@ -284,7 +309,7 @@ def diff_with_instances(target_id: str, payload: schemas.PushCustomFieldsRequest
     except Exception as exc:
         raise _github_error_to_http(exc)
 
-    instances = _resolve_instances(db, payload.instance_ids, payload.tags)
+    instances = _resolve_instances(db, payload.instance_ids, payload.tags, ctx)
     if not instances:
         raise HTTPException(400, "No matching NetBox instances (check instance_ids/tags).")
 

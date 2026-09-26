@@ -3,18 +3,23 @@ from sqlalchemy.orm import Session
 
 from app import crypto, models, schemas
 from app.database import get_db
+from app.rbac import AccessContext, filter_scoped, get_access_context, require_role
 from app.services import netbox_client
 
 router = APIRouter(prefix="/api/instances", tags=["instances"])
 
 
 @router.get("", response_model=list[schemas.NetboxInstanceOut])
-def list_instances(db: Session = Depends(get_db)):
-    return db.query(models.NetboxInstance).order_by(models.NetboxInstance.name).all()
+def list_instances(db: Session = Depends(get_db), ctx: AccessContext = Depends(get_access_context)):
+    instances = db.query(models.NetboxInstance).order_by(models.NetboxInstance.name).all()
+    return filter_scoped(instances, "instance", ctx, db)
 
 
 @router.post("", response_model=schemas.NetboxInstanceOut, status_code=201)
-def create_instance(payload: schemas.NetboxInstanceCreate, db: Session = Depends(get_db)):
+def create_instance(
+    payload: schemas.NetboxInstanceCreate, db: Session = Depends(get_db),
+    _: AccessContext = Depends(require_role("admin")),
+):
     if db.query(models.NetboxInstance).filter_by(name=payload.name).first():
         raise HTTPException(400, "An instance with that name already exists.")
     instance = models.NetboxInstance(
@@ -34,7 +39,8 @@ def create_instance(payload: schemas.NetboxInstanceCreate, db: Session = Depends
 
 @router.patch("/{instance_id}", response_model=schemas.NetboxInstanceOut)
 def update_instance(
-    instance_id: str, payload: schemas.NetboxInstanceUpdate, db: Session = Depends(get_db)
+    instance_id: str, payload: schemas.NetboxInstanceUpdate, db: Session = Depends(get_db),
+    _: AccessContext = Depends(require_role("admin")),
 ):
     instance = db.get(models.NetboxInstance, instance_id)
     if not instance:
@@ -59,7 +65,9 @@ def update_instance(
 
 
 @router.delete("/{instance_id}", status_code=204)
-def delete_instance(instance_id: str, db: Session = Depends(get_db)):
+def delete_instance(
+    instance_id: str, db: Session = Depends(get_db), _: AccessContext = Depends(require_role("admin"))
+):
     instance = db.get(models.NetboxInstance, instance_id)
     if not instance:
         raise HTTPException(404, "Instance not found.")

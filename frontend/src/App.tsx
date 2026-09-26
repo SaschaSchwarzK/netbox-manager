@@ -11,14 +11,16 @@ import DriftPage from "./pages/DriftPage";
 import AuditLogPage from "./pages/AuditLogPage";
 import SyslogPage from "./pages/SyslogPage";
 import FleetPage from "./pages/FleetPage";
+import AccessControlPage from "./pages/AccessControlPage";
 import LoginScreen from "./pages/LoginScreen";
 import { authApi, AuthMeResponse } from "./api/client";
+import { AccessContext, makeAccessValue } from "./contexts/AccessContext";
 
 export default function App() {
   const [me, setMe] = useState<AuthMeResponse | null>(null);
 
   useEffect(() => {
-    authApi.me().then(setMe).catch(() => setMe({ auth_enabled: true, authenticated: false, user: null }));
+    authApi.me().then(setMe).catch(() => setMe({ auth_enabled: true, authenticated: false, user: null, role: "viewer" }));
   }, []);
 
   if (!me) return null; // brief flash while the initial /api/auth/me check resolves
@@ -27,12 +29,15 @@ export default function App() {
     return <LoginScreen />;
   }
 
+  const access = makeAccessValue(me.role);
+
   const handleLogout = async () => {
     await authApi.logout();
     window.location.href = "/";
   };
 
   return (
+    <AccessContext.Provider value={access}>
     <BrowserRouter>
       <div className="app-shell">
         <aside className="sidebar">
@@ -70,10 +75,16 @@ export default function App() {
             <NavLink to="/github-targets" className={({ isActive }) => (isActive ? "active" : "")}>
               GitHub Targets
             </NavLink>
+            {access.can("admin") && (
+              <NavLink to="/access-control" className={({ isActive }) => (isActive ? "active" : "")}>
+                Access Control
+              </NavLink>
+            )}
           </nav>
           {me.user && (
             <div style={{ marginTop: "auto", padding: "12px 20px", borderTop: "1px solid var(--border)", fontSize: 12 }}>
               <div style={{ color: "var(--text)" }}>{me.user.name ?? me.user.email}</div>
+              <div style={{ color: "var(--muted)", marginTop: 2 }}>role: {me.role}</div>
               {me.user.groups.length > 0 && (
                 <div style={{ color: "var(--muted)", marginTop: 2 }}>{me.user.groups.join(", ")}</div>
               )}
@@ -97,9 +108,11 @@ export default function App() {
             <Route path="/syslog" element={<SyslogPage />} />
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/github-targets" element={<GithubTargetsPage />} />
+            {access.can("admin") && <Route path="/access-control" element={<AccessControlPage />} />}
           </Routes>
         </main>
       </div>
     </BrowserRouter>
+    </AccessContext.Provider>
   );
 }

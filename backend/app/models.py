@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -9,6 +9,40 @@ from app.database import Base
 
 def gen_uuid() -> str:
     return str(uuid.uuid4())
+
+
+class RoleMapping(Base):
+    """Maps an OIDC group to an app role. A user's effective role is the highest role among all their groups."""
+    __tablename__ = "role_mappings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    oidc_group: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)  # "viewer" | "editor" | "admin"
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ScopeMapping(Base):
+    """
+    Maps an OIDC group to a specific instance/GitHub target it can see and act on.
+    A resource with zero scope mappings is visible to everyone (opt-in restriction,
+    not opt-out) — see app/rbac.py.
+    """
+    __tablename__ = "scope_mappings"
+    __table_args__ = (UniqueConstraint("oidc_group", "resource_type", "resource_id", name="uq_scope_mapping"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    oidc_group: Mapped[str] = mapped_column(String(256), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(32), nullable=False)  # "instance" | "github_target"
+    resource_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SeenOidcGroup(Base):
+    """Every OIDC group observed at login, purely so the admin UI can autocomplete group names rather than guess-typing."""
+    __tablename__ = "seen_oidc_groups"
+
+    name: Mapped[str] = mapped_column(String(256), primary_key=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class NetboxInstance(Base):

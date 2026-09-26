@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { githubApi, GithubTarget } from "../api/client";
+import { useAccess } from "../contexts/AccessContext";
 
 export default function GithubTargetsPage() {
+  const access = useAccess();
+  const isAdmin = access.can("admin");
   const [targets, setTargets] = useState<GithubTarget[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
@@ -55,9 +58,13 @@ export default function GithubTargetsPage() {
       <p className="page-subtitle">Repos device-type YAML can be committed to, e.g. a fork of netbox-community/devicetype-library.</p>
 
       <div className="toolbar">
-        <button className="primary" onClick={() => setShowForm((s) => !s)}>
-          {showForm ? "Cancel" : "+ Add target"}
-        </button>
+        {isAdmin ? (
+          <button className="primary" onClick={() => setShowForm((s) => !s)}>
+            {showForm ? "Cancel" : "+ Add target"}
+          </button>
+        ) : (
+          <span className="pill">Read-only — managing GitHub targets requires the admin role</span>
+        )}
       </div>
 
       {showForm && (
@@ -126,7 +133,7 @@ export default function GithubTargetsPage() {
                 </td>
                 <td>
                   <button onClick={() => handleTestExisting(t.id)}>Test</button>{" "}
-                  <button className="danger" onClick={() => handleDelete(t.id)}>Remove</button>
+                  {isAdmin && <button className="danger" onClick={() => handleDelete(t.id)}>Remove</button>}
                 </td>
               </tr>
             ))}

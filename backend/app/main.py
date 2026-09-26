@@ -12,6 +12,7 @@ from app.routers import auth, device_types, drift, fleet, github, instances, sea
 from app.routers import audit as audit_router
 from app.routers import custom_fields
 from app.routers import syslog as syslog_router
+from app.routers import access as access_router
 from app.services import syslog_client  # noqa: F401  (import registers the audit -> syslog event listener)
 
 Base.metadata.create_all(bind=engine)
@@ -62,6 +63,7 @@ app.include_router(audit_router.router)
 app.include_router(fleet.router)
 app.include_router(custom_fields.router)
 app.include_router(syslog_router.router)
+app.include_router(access_router.router)
 
 
 def _run_scheduled_drift_check():

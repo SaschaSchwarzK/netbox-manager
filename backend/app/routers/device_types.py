@@ -10,6 +10,7 @@ from app import crypto, models, schemas
 from app.auth import get_current_actor
 from app.database import get_db
 from app.devicetype_schema import DeviceType
+from app.rbac import AccessContext, filter_scoped, get_access_context, has_role_at_least, require_role
 from app.services import diff as diff_mod
 from app.services import github_repo, netbox_client
 from app.services.github_repo import RepoAccessError
@@ -17,9 +18,12 @@ from app.services.github_repo import RepoAccessError
 router = APIRouter(prefix="/api/repos/{target_id}/device-types", tags=["device-types"])
 
 
-def _get_target(target_id: str, db: Session) -> models.GithubTarget:
+def _get_target(target_id: str, db: Session, ctx: AccessContext | None = None) -> models.GithubTarget:
     target = db.get(models.GithubTarget, target_id)
     if not target:
+        raise HTTPException(404, "GitHub target not found.")
+    if ctx is not None and filter_scoped([target], "github_target", ctx, db) == []:
+        # 404, not 403: a scoped-out target shouldn't even confirm its own existence to this user.
         raise HTTPException(404, "GitHub target not found.")
     return target
 
@@ -63,8 +67,8 @@ def _log_action(db: Session, *, repo_target_id: str, file_path: str, target_name
 
 
 @router.get("", response_model=list[schemas.DeviceTypeSummary])
-def list_device_types(target_id: str, db: Session = Depends(get_db)):
-    target = _get_target(target_id, db)
+def list_device_types(target_id: str, db: Session = Depends(get_db), ctx: AccessContext = Depends(get_access_context)):
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     try:
         files = github_repo.list_device_types(pat, target.repo, target.branch, _base_dir(target))
@@ -89,8 +93,8 @@ def list_device_types(target_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/file", response_model=schemas.DeviceTypeFileOut)
-def get_device_type(target_id: str, path: str = Query(...), db: Session = Depends(get_db)):
-    target = _get_target(target_id, db)
+def get_device_type(target_id: str, path: str = Query(...), db: Session = Depends(get_db), ctx: AccessContext = Depends(get_access_context)):
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     try:
         working_branch = github_repo.resolve_working_branch(pat, target.repo, target.branch, path)
@@ -104,8 +108,11 @@ def get_device_type(target_id: str, path: str = Query(...), db: Session = Depend
 
 
 @router.post("", response_model=schemas.SaveResult, status_code=201)
-def create_device_type(target_id: str, payload: schemas.CreateDeviceTypeRequest, request: Request, db: Session = Depends(get_db)):
-    target = _get_target(target_id, db)
+def create_device_type(
+    target_id: str, payload: schemas.CreateDeviceTypeRequest, request: Request, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     actor = get_current_actor(request)
 
@@ -146,9 +153,10 @@ def create_device_type(target_id: str, payload: schemas.CreateDeviceTypeRequest,
 @router.put("/file", response_model=schemas.SaveResult)
 def save_device_type(
     target_id: str, payload: schemas.SaveDeviceTypeRequest, request: Request,
-    path: str = Query(...), db: Session = Depends(get_db)
+    path: str = Query(...), db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
 ):
-    target = _get_target(target_id, db)
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     actor = get_current_actor(request)
 
@@ -179,9 +187,10 @@ def save_device_type(
 @router.delete("/file", status_code=204)
 def delete_device_type(
     target_id: str, payload: schemas.DeleteDeviceTypeRequest, request: Request,
-    path: str = Query(...), db: Session = Depends(get_db)
+    path: str = Query(...), db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
 ):
-    target = _get_target(target_id, db)
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     actor = get_current_actor(request)
     commit_message = payload.commit_message or f"Remove device-type {path}"
@@ -196,8 +205,11 @@ def delete_device_type(
 
 
 @router.post("/import", response_model=schemas.SaveResult, status_code=201)
-def import_yaml(target_id: str, payload: schemas.ImportYamlRequest, request: Request, db: Session = Depends(get_db)):
-    target = _get_target(target_id, db)
+def import_yaml(
+    target_id: str, payload: schemas.ImportYamlRequest, request: Request, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     actor = get_current_actor(request)
 
@@ -231,14 +243,14 @@ def import_yaml(target_id: str, payload: schemas.ImportYamlRequest, request: Req
 
 
 @router.get("/file/coverage", response_model=list[schemas.CoverageEntry])
-def coverage(target_id: str, path: str = Query(...), db: Session = Depends(get_db)):
+def coverage(target_id: str, path: str = Query(...), db: Session = Depends(get_db), ctx: AccessContext = Depends(get_access_context)):
     """
     Answers "which instances have this device type, and are they up to date?"
     across every configured NetBox instance — not just ones it's been pushed to
     before (that's what Drift tracks), and not requiring the caller to pick a
     subset first (that's what diff-with-netbox is for during a push).
     """
-    target = _get_target(target_id, db)
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     try:
         source = github_repo.get_file(pat, target.repo, target.branch, path)["payload"]
@@ -246,6 +258,7 @@ def coverage(target_id: str, path: str = Query(...), db: Session = Depends(get_d
         raise _github_error_to_http(exc)
 
     instances = db.query(models.NetboxInstance).all()
+    instances = filter_scoped(instances, "instance", ctx, db)
 
     def check_one(instance: models.NetboxInstance) -> schemas.CoverageEntry:
         token = crypto.decrypt(instance.api_token_encrypted)
@@ -270,14 +283,17 @@ def coverage(target_id: str, path: str = Query(...), db: Session = Depends(get_d
 
 
 @router.post("/bulk-import/scan", response_model=list[schemas.BulkImportScanEntry])
-def bulk_import_scan(target_id: str, payload: schemas.BulkImportScanRequest, db: Session = Depends(get_db)):
+def bulk_import_scan(
+    target_id: str, payload: schemas.BulkImportScanRequest, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
     """
     Lists every .yml/.yaml file under the source repo's device-type directory.
     Cheap by design (one git-trees API call) — manufacturer/slug are guessed
     from the path, not fetched from file content, so this stays fast even
     against something the size of the full community library.
     """
-    target = _get_target(target_id, db)
+    target = _get_target(target_id, db, ctx)
     source_pat = payload.source_pat or crypto.decrypt(target.pat_encrypted)
     try:
         files = github_repo.list_device_types(source_pat, payload.source_repo, payload.source_branch, payload.source_base_dir)
@@ -292,13 +308,16 @@ def bulk_import_scan(target_id: str, payload: schemas.BulkImportScanRequest, db:
 
 
 @router.post("/bulk-import", response_model=schemas.BulkImportResult)
-def bulk_import(target_id: str, payload: schemas.BulkImportRequest, request: Request, db: Session = Depends(get_db)):
+def bulk_import(
+    target_id: str, payload: schemas.BulkImportRequest, request: Request, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
     """
     Fetches each selected file from the source repo, validates it against the
     device-type schema, and lands all of them on ONE shared branch with ONE
     pull request against the target repo — not one PR per file.
     """
-    target = _get_target(target_id, db)
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     source_pat = payload.source_pat or pat
     actor = get_current_actor(request)
@@ -371,10 +390,13 @@ def bulk_import(target_id: str, payload: schemas.BulkImportRequest, request: Req
         imported=commit_result["created"], skipped_existing=commit_result["skipped"], failed=all_failed,
     )
 @router.post("/import-from-netbox/scan", response_model=list[schemas.ImportFromNetboxScanEntry])
-def import_from_netbox_scan(target_id: str, payload: schemas.ImportFromNetboxScanRequest, db: Session = Depends(get_db)):
-    _get_target(target_id, db)  # 404s early if the repo target itself is bogus
+def import_from_netbox_scan(
+    target_id: str, payload: schemas.ImportFromNetboxScanRequest, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
+    _get_target(target_id, db, ctx)  # 404s early if the repo target itself is bogus or scoped out
     instance = db.get(models.NetboxInstance, payload.instance_id)
-    if not instance:
+    if not instance or not filter_scoped([instance], "instance", ctx, db):
         raise HTTPException(404, "NetBox instance not found.")
     token = crypto.decrypt(instance.api_token_encrypted)
     try:
@@ -385,7 +407,10 @@ def import_from_netbox_scan(target_id: str, payload: schemas.ImportFromNetboxSca
 
 
 @router.post("/import-from-netbox", response_model=schemas.BulkImportResult)
-def import_from_netbox(target_id: str, payload: schemas.ImportFromNetboxRequest, request: Request, db: Session = Depends(get_db)):
+def import_from_netbox(
+    target_id: str, payload: schemas.ImportFromNetboxRequest, request: Request, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
     """
     Fetches each selected device type's full definition (components included)
     from a NetBox instance and lands all of them on ONE shared branch with ONE
@@ -397,9 +422,9 @@ def import_from_netbox(target_id: str, payload: schemas.ImportFromNetboxRequest,
     pushing straight from an unreviewed import would bypass the PR-only and
     approval-gate guarantees the rest of the app relies on.
     """
-    target = _get_target(target_id, db)
+    target = _get_target(target_id, db, ctx)
     instance = db.get(models.NetboxInstance, payload.instance_id)
-    if not instance:
+    if not instance or not filter_scoped([instance], "instance", ctx, db):
         raise HTTPException(404, "NetBox instance not found.")
 
     pat = crypto.decrypt(target.pat_encrypted)
@@ -472,16 +497,17 @@ def import_from_netbox(target_id: str, payload: schemas.ImportFromNetboxRequest,
 
 @router.post("/file/diff-with-netbox", response_model=list[schemas.InstanceDiffResult])
 def diff_with_netbox(
-    target_id: str, payload: schemas.PushToNetboxRequest, path: str = Query(...), db: Session = Depends(get_db)
+    target_id: str, payload: schemas.PushToNetboxRequest, path: str = Query(...), db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
 ):
-    target = _get_target(target_id, db)
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     try:
         source = github_repo.get_file(pat, target.repo, target.branch, path)["payload"]
     except Exception as exc:
         raise _github_error_to_http(exc)
 
-    instances = _resolve_instances(db, payload.instance_ids, payload.tags)
+    instances = _resolve_instances(db, payload.instance_ids, payload.tags, ctx)
     results = []
     for instance in instances:
         token = crypto.decrypt(instance.api_token_encrypted)
@@ -496,12 +522,14 @@ def diff_with_netbox(
     return results
 
 
-def _resolve_instances(db: Session, instance_ids: list[str], tags: list[str]) -> list[models.NetboxInstance]:
+def _resolve_instances(db: Session, instance_ids: list[str], tags: list[str], ctx: AccessContext | None = None) -> list[models.NetboxInstance]:
     wanted_ids = set(instance_ids)
     wanted_tags = set(tags)
     if not wanted_ids and not wanted_tags:
         return []
     all_instances = db.query(models.NetboxInstance).all()
+    if ctx is not None:
+        all_instances = filter_scoped(all_instances, "instance", ctx, db)
     seen = {}
     for inst in all_instances:
         if inst.id in wanted_ids or (wanted_tags & set(inst.tags)):
@@ -512,9 +540,10 @@ def _resolve_instances(db: Session, instance_ids: list[str], tags: list[str]) ->
 @router.post("/file/push-to-netbox", response_model=list[schemas.PushResultItem])
 def push_to_netbox(
     target_id: str, payload: schemas.PushToNetboxRequest, request: Request,
-    path: str = Query(...), db: Session = Depends(get_db)
+    path: str = Query(...), db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
 ):
-    target = _get_target(target_id, db)
+    target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     actor = get_current_actor(request)
     try:
@@ -522,13 +551,22 @@ def push_to_netbox(
     except Exception as exc:
         raise _github_error_to_http(exc)
 
-    instances = _resolve_instances(db, payload.instance_ids, payload.tags)
+    instances = _resolve_instances(db, payload.instance_ids, payload.tags, ctx)
     if not instances:
         raise HTTPException(400, "No matching NetBox instances (check instance_ids/tags).")
 
     results = []
     for instance in instances:
         if instance.requires_approved_pr:
+            if not has_role_at_least(ctx.role, "admin"):
+                detail = "Blocked: this instance requires the admin role to push to (it's flagged 'requires an approved PR')."
+                results.append(schemas.PushResultItem(target=instance.name, status="error", detail=detail))
+                db.add(models.DeviceTypePushHistory(
+                    repo_target_id=target_id, file_path=path, target_type="netbox", target_name=instance.name,
+                    status="error", detail=detail,
+                    actor_sub=actor.get("sub"), actor_name=actor.get("name"), actor_email=actor.get("email"),
+                ))
+                continue
             try:
                 approval = github_repo.get_merged_pr_approval(pat, target.repo, target.branch, path)
             except Exception as exc:

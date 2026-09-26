@@ -5,14 +5,16 @@ from sqlalchemy.orm import Session
 
 from app import crypto, models, schemas
 from app.database import get_db
+from app.rbac import AccessContext, filter_scoped, get_access_context
 from app.services import github_repo, netbox_client
 
 router = APIRouter(prefix="/api/fleet", tags=["fleet"])
 
 
 @router.get("/health", response_model=list[schemas.InstanceHealthOut])
-def fleet_health(db: Session = Depends(get_db)):
+def fleet_health(db: Session = Depends(get_db), ctx: AccessContext = Depends(get_access_context)):
     instances = db.query(models.NetboxInstance).all()
+    instances = filter_scoped(instances, "instance", ctx, db)
 
     def check_one(instance: models.NetboxInstance) -> schemas.InstanceHealthOut:
         token = crypto.decrypt(instance.api_token_encrypted)
@@ -38,8 +40,9 @@ def fleet_health(db: Session = Depends(get_db)):
 
 
 @router.get("/github-token-status", response_model=list[schemas.GithubTokenStatusOut])
-def github_token_status(db: Session = Depends(get_db)):
+def github_token_status(db: Session = Depends(get_db), ctx: AccessContext = Depends(get_access_context)):
     targets = db.query(models.GithubTarget).all()
+    targets = filter_scoped(targets, "github_target", ctx, db)
 
     def check_one(target: models.GithubTarget) -> schemas.GithubTokenStatusOut:
         pat = crypto.decrypt(target.pat_encrypted)

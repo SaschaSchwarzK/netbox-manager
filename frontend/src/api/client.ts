@@ -26,11 +26,50 @@ export interface AuthMeResponse {
   auth_enabled: boolean;
   authenticated: boolean;
   user: AuthUser | null;
+  role: "viewer" | "editor" | "admin";
 }
 
 export const authApi = {
   me: () => request<AuthMeResponse>("/auth/me"),
   logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+};
+
+// ---------- Access control (RBAC) ----------
+
+export type Role = "viewer" | "editor" | "admin";
+
+export interface RoleMapping {
+  id: string;
+  oidc_group: string;
+  role: Role;
+  created_at: string;
+}
+
+export interface ScopeMapping {
+  id: string;
+  oidc_group: string;
+  resource_type: "instance" | "github_target";
+  resource_id: string;
+  resource_name: string;
+  created_at: string;
+}
+
+export const accessApi = {
+  knownGroups: () => request<string[]>("/access/known-groups"),
+
+  listRoleMappings: () => request<RoleMapping[]>("/access/role-mappings"),
+  createRoleMapping: (oidc_group: string, role: Role) =>
+    request<RoleMapping>("/access/role-mappings", { method: "POST", body: JSON.stringify({ oidc_group, role }) }),
+  updateRoleMapping: (id: string, oidc_group: string, role: Role) =>
+    request<RoleMapping>(`/access/role-mappings/${id}`, { method: "PATCH", body: JSON.stringify({ oidc_group, role }) }),
+  deleteRoleMapping: (id: string) => request<void>(`/access/role-mappings/${id}`, { method: "DELETE" }),
+
+  listScopeMappings: () => request<ScopeMapping[]>("/access/scope-mappings"),
+  createScopeMapping: (oidc_group: string, resource_type: "instance" | "github_target", resource_id: string) =>
+    request<ScopeMapping>("/access/scope-mappings", {
+      method: "POST", body: JSON.stringify({ oidc_group, resource_type, resource_id }),
+    }),
+  deleteScopeMapping: (id: string) => request<void>(`/access/scope-mappings/${id}`, { method: "DELETE" }),
 };
 
 // ---------- Instances ----------

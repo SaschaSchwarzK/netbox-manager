@@ -312,6 +312,43 @@ class SyslogTestResult(BaseModel):
     detail: str
 
 
+# ---------- Access control (RBAC) ----------
+
+class RoleMappingCreate(BaseModel):
+    oidc_group: str
+    role: str  # "viewer" | "editor" | "admin"
+
+
+class RoleMappingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    oidc_group: str
+    role: str
+    created_at: datetime
+
+
+class ScopeMappingCreate(BaseModel):
+    oidc_group: str
+    resource_type: str  # "instance" | "github_target"
+    resource_id: str
+
+
+class ScopeMappingOut(BaseModel):
+    id: str
+    oidc_group: str
+    resource_type: str
+    resource_id: str
+    resource_name: str  # resolved for display, since the UI shouldn't have to cross-reference IDs itself
+    created_at: datetime
+
+
+class CurrentAccessOut(BaseModel):
+    role: str
+    groups: list[str]
+    scoping_active: bool
+
+
 # ---------- Custom-fields template ----------
 
 class CustomFieldsTemplateOut(BaseModel):
