@@ -10,7 +10,7 @@ from app import crypto, models, schemas
 from app.auth import get_current_actor
 from app.database import get_db
 from app.devicetype_schema import DeviceType
-from app.rbac import AccessContext, get_access_context, has_role_at_least, require_role, require_visible, role_for_resource
+from app.rbac import AccessContext, filter_scoped, get_access_context, has_role_at_least, require_role, require_visible, role_for_resource
 from app.services import diff as diff_mod
 from app.services import github_repo, netbox_client
 from app.services.github_repo import RepoAccessError

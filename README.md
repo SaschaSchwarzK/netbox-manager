@@ -7,6 +7,9 @@ the repo is the source of truth, and every save from the editor is a git commit 
 The app's own config (NetBox instances, GitHub repo targets, push history) is kept in a small
 local SQLite database.
 
+For application workflows and annotated screenshot placeholders, see the
+[NetBox Manager User Guide](docs/user-guide.md).
+
 ## Stack
 
 - **Backend:** FastAPI + SQLAlchemy (SQLite) + `pynetbox` for the NetBox API + `PyGithub` for reading/committing device-type files.
