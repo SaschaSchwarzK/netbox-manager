@@ -27,6 +27,7 @@ docker volume create "$cert_volume_name" >/dev/null
 docker run --detach \
     --name "$container_name" \
     --env "NBM_SECRET_KEY=$test_secret" \
+    --env "AUTHENTICATION_DISABLED=True" \
     --env "NBM_DATABASE_URL=sqlite:////tmp/must-not-be-used.db" \
     --volume "$volume_name:/app/data" \
     --volume "$cert_volume_name:/app/certs" \

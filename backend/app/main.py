@@ -9,8 +9,6 @@ from starlette.responses import JSONResponse
 from app.auth import get_current_user_optional
 from app.config import settings
 from app.database import Base, SessionLocal, engine
-from app.migrations import run_lightweight_migrations
-from app.rbac_migration import backfill_access_mappings
 from app.routers import auth, device_types, drift, fleet, github, instances, search
 from app.routers import audit as audit_router
 from app.routers import custom_fields
@@ -22,22 +20,36 @@ logger = logging.getLogger(__name__)
 
 _local_user_set = bool(settings.local_admin_user.strip())
 _local_password_set = bool(settings.local_admin_password.strip())
-if settings.require_auth and not settings.auth_required:
-    raise RuntimeError(
-        "NBM_REQUIRE_AUTH is enabled, but neither OIDC nor a complete local admin credential pair is configured."
-    )
-if settings.local_admin_enabled:
-    logger.info("Break-glass local admin login is enabled.")
-elif _local_user_set != _local_password_set:
+_oidc_values = (
+    settings.oidc_issuer.strip(),
+    settings.oidc_client_id.strip(),
+    settings.oidc_client_secret.strip(),
+)
+if settings.authentication_disabled:
     logger.warning(
-        "Exactly one of NBM_LOCAL_ADMIN_USER and NBM_LOCAL_ADMIN_PASSWORD is set; local admin login is disabled."
+        "Authentication and authorization are disabled by AUTHENTICATION_DISABLED=True."
     )
-if not settings.auth_required:
-    logger.warning("No authentication method is configured; the API is open for local development.")
+elif any(_oidc_values) and not settings.oidc_enabled:
+    raise RuntimeError(
+        "OIDC configuration is incomplete. Set NBM_OIDC_ISSUER, NBM_OIDC_CLIENT_ID, "
+        "and NBM_OIDC_CLIENT_SECRET, or remove all three values."
+    )
+elif _local_user_set != _local_password_set:
+    raise RuntimeError(
+        "Local admin configuration is incomplete. Set both NBM_LOCAL_ADMIN_USER and "
+        "NBM_LOCAL_ADMIN_PASSWORD, or remove both values."
+    )
+elif not settings.oidc_enabled and not settings.local_admin_enabled:
+    raise RuntimeError(
+        "Authentication is enforced, but no complete authentication method is configured. "
+        "Configure OIDC, configure the local administrator, or explicitly set "
+        "AUTHENTICATION_DISABLED=True."
+    )
+
+if not settings.authentication_disabled and settings.local_admin_enabled:
+    logger.info("Break-glass local admin login is enabled.")
 
 Base.metadata.create_all(bind=engine)
-run_lightweight_migrations(engine, Base)
-backfill_access_mappings(engine)
 
 app = FastAPI(title="NetBox Manager API", version="0.1.0")
 
@@ -62,7 +74,7 @@ class AuthRequiredMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         path = request.url.path
         if (
-            settings.auth_required
+            not settings.authentication_disabled
             and request.method != "OPTIONS"  # never block CORS preflight; it carries no cookies anyway
             and path.startswith("/api/")
             and not any(path.startswith(p) for p in _PUBLIC_API_PREFIXES)

@@ -15,44 +15,12 @@ SCOPE_ALL = "*"
 RESOURCE_TYPES = ("*", "instance", "github_target")
 
 
-class RoleMapping(Base):
-    """LEGACY (read-only, no longer written to; still read once by app/rbac_migration.py).
-
-    Maps an OIDC group to an app role. A user's effective role is the highest role among all
-    their groups.
-    """
-    __tablename__ = "role_mappings"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
-    oidc_group: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
-    role: Mapped[str] = mapped_column(String(32), nullable=False)  # "viewer" | "editor" | "admin"
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
-class ScopeMapping(Base):
-    """LEGACY (read-only, no longer written to; still read once by app/rbac_migration.py).
-
-    Maps an OIDC group to a specific instance/GitHub target it can see and act on.
-    A resource with zero scope mappings is visible to everyone (opt-in restriction,
-    not opt-out) — see app/rbac.py.
-    """
-    __tablename__ = "scope_mappings"
-    __table_args__ = (UniqueConstraint("oidc_group", "resource_type", "resource_id", name="uq_scope_mapping"),)
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
-    oidc_group: Mapped[str] = mapped_column(String(256), nullable=False)
-    resource_type: Mapped[str] = mapped_column(String(32), nullable=False)  # "instance" | "github_target"
-    resource_id: Mapped[str] = mapped_column(String(36), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
 class AccessMapping(Base):
     """One row = one OIDC group -> (role, scope) grant.
 
     resource_type/resource_id == "*" means the grant applies to every resource ("global").
     role may be NULL for a visibility-only grant: the group may see the resource but gains no
-    role from this row (it keeps the app default role). Legacy RoleMapping/ScopeMapping rows are
-    expanded into this table once at startup — see app/rbac_migration.py.
+    role from this row (it keeps the app default role).
     """
     __tablename__ = "access_mappings"
     __table_args__ = (
@@ -70,14 +38,6 @@ class AccessMapping(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
-
-
-class DataMigration(Base):
-    """One-time data backfills already applied to this database (see app/rbac_migration.py)."""
-    __tablename__ = "data_migrations"
-
-    name: Mapped[str] = mapped_column(String(64), primary_key=True)
-    applied_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class SeenOidcGroup(Base):
@@ -134,7 +94,8 @@ class DriftRecord(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     instance_id: Mapped[str] = mapped_column(String(36), ForeignKey("netbox_instances.id"), nullable=False)
     repo_target_id: Mapped[str] = mapped_column(String(36), ForeignKey("github_targets.id"), nullable=False)
-    file_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), default="device_type")  # "device_type" or "custom_fields"
+    file_path: Mapped[str] = mapped_column(String(512), nullable=False)  # device-type file path, or the target's custom-fields template path
     status: Mapped[str] = mapped_column(String(32))  # in_sync / drift / missing / error
     detail_json: Mapped[str] = mapped_column(Text, default="{}")
     checked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

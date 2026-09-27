@@ -1,4 +1,4 @@
-import { DiffResult, ChangedItem } from "../api/client";
+import { DiffResult, ChangedItem, CustomFieldsDiffResult } from "../api/client";
 
 const COMPONENT_LABELS: Record<string, string> = {
   "interfaces": "Interfaces",
@@ -116,6 +116,45 @@ export default function DiffView({ diff }: { diff: DiffResult }) {
           <ChangedItemsList items={change.changed} />
         </div>
       ))}
+    </div>
+  );
+}
+
+// A one-line summary of a custom-fields template diff, mirroring summarizeDiff above.
+export function summarizeCustomFieldsDiff(diff: CustomFieldsDiffResult): string {
+  if (diff.status === "in_sync") return "In sync";
+  if (diff.status === "error") return "Error checking";
+
+  const parts: string[] = [];
+  (["custom_fields", "custom_field_choice_sets"] as const).forEach((key) => {
+    const d = diff[key];
+    if (!d) return;
+    const n = d.missing_on_instance.length + d.extra_on_instance.length + d.changed.length;
+    if (n > 0) parts.push(`${n} ${key === "custom_fields" ? "field" : "choice set"}${n === 1 ? "" : "s"}`);
+  });
+  return parts.length > 0 ? parts.join(", ") : "Differs";
+}
+
+// Shared between the Custom Fields page's on-demand check and the Drift page's
+// persisted "custom_fields"-kind records, so both render identically.
+export function CustomFieldsDiffView({ diff }: { diff: CustomFieldsDiffResult }) {
+  if (diff.status === "error") return <p style={{ color: "var(--danger)", fontSize: 13 }}>Could not check this instance.</p>;
+  if (diff.status === "in_sync") return <p style={{ color: "var(--success)", fontSize: 13 }}>In sync with template.</p>;
+
+  return (
+    <div style={{ fontSize: 13 }}>
+      {(["custom_fields", "custom_field_choice_sets"] as const).map((key) => {
+        const d = diff[key];
+        if (!d || (!d.missing_on_instance.length && !d.extra_on_instance.length && !d.changed.length)) return null;
+        return (
+          <div key={key} style={{ marginBottom: 8 }}>
+            <div style={{ color: "var(--muted)" }}>{key === "custom_fields" ? "Custom fields" : "Choice sets"}:</div>
+            {d.missing_on_instance.length > 0 && <div style={{ marginLeft: 12, color: "var(--danger)" }}>missing on instance: {d.missing_on_instance.join(", ")}</div>}
+            {d.extra_on_instance.length > 0 && <div style={{ marginLeft: 12, color: "var(--warning)" }}>extra on instance (not in template): {d.extra_on_instance.join(", ")}</div>}
+            <ChangedItemsList items={d.changed} />
+          </div>
+        );
+      })}
     </div>
   );
 }

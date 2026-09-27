@@ -29,6 +29,9 @@ Depending on the deployment, the sign-in screen can offer:
 - **Break-glass local administrator login** for recovery when the identity provider is unavailable.
 
 The local account is a full application administrator and should only be used for recovery.
+Authentication is enforced by default. An intentionally open deployment must explicitly set
+`AUTHENTICATION_DISABLED=True`; that mode also disables authorization and grants unrestricted
+access to every request.
 
 > **Screenshot placeholder:** Login screen showing SSO and local-admin options.  
 > Suggested file: `docs/images/user-guide/login.png`
@@ -161,9 +164,12 @@ Use **Fleet** to check NetBox reachability, versions, installed plugins, respons
 available token-expiry information. Resolve connectivity or credential warnings before a large
 publish operation.
 
-Use **Drift** to see device types that differ from their GitHub source. Select **Check all now**
-for an on-demand refresh; otherwise the background schedule refreshes the data periodically when
-enabled by the administrator.
+Use **Drift** to see device types and custom-fields templates that differ from their GitHub source.
+This covers device types NetBox Manager has pushed before, and also device types that were created
+directly in a NetBox instance by hand — as long as their manufacturer and slug match something
+already committed to the repo, they're picked up automatically. Select **Check all now** for an
+on-demand refresh; otherwise the background schedule refreshes the data periodically when enabled
+by the administrator.
 
 ![Fleet health dashboard](images/user-guide/fleet.png)
 

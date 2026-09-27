@@ -6,9 +6,8 @@ Visibility remains opt-in per resource: a resource with no concrete mappings is
 visible to everyone, and a global mapping does not reveal specifically scoped
 resources.
 
-When OIDC isn't configured at all (local/dev), every request gets role
-"admin" and scoping is skipped entirely — consistent with how auth itself
-already behaves in that mode elsewhere in the app.
+When authentication and authorization are explicitly disabled, every request
+gets role "admin" and scoping is skipped entirely.
 """
 from dataclasses import dataclass, field
 
@@ -56,7 +55,7 @@ def has_role_at_least(role: str, minimum: str) -> bool:
 class AccessContext:
     role: str
     groups: list[str] = field(default_factory=list)
-    scoping_active: bool = True  # False when OIDC is off entirely; scope checks are skipped in that case
+    scoping_active: bool = True
     mappings: list[models.AccessMapping] = field(default_factory=list)
     app_admin: bool = True
 
@@ -65,7 +64,7 @@ def get_access_context(request: Request, db: Session = Depends(get_db)) -> Acces
     user = get_current_user_optional(request)
     if (user or {}).get("local") is True:
         return AccessContext(role="admin", groups=[], scoping_active=False, app_admin=True)
-    if not settings.auth_required:
+    if settings.authentication_disabled:
         return AccessContext(role="admin", groups=[], scoping_active=False)
     groups = (user or {}).get("groups", []) or []
     mappings = []

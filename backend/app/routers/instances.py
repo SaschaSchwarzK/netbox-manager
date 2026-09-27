@@ -95,9 +95,6 @@ def delete_instance(
     db.query(models.AccessMapping).filter_by(
         resource_type="instance", resource_id=instance_id
     ).delete(synchronize_session=False)
-    db.query(models.ScopeMapping).filter_by(
-        resource_type="instance", resource_id=instance_id
-    ).delete(synchronize_session=False)
     db.delete(instance)
     db.commit()
 

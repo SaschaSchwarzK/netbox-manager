@@ -4,7 +4,7 @@ import {
   githubApi, GithubTarget, instancesApi, NetboxInstance,
   customFieldsApi, CustomFieldsTemplateFile, InstanceCustomFieldsDiffResult, ImportCandidate,
 } from "../api/client";
-import { ChangedItemsList } from "../components/DiffView";
+import { CustomFieldsDiffView } from "../components/DiffView";
 import CustomFieldForm from "../components/CustomFieldForm";
 import ChoiceSetForm from "../components/ChoiceSetForm";
 
@@ -422,24 +422,9 @@ export default function CustomFieldsPage() {
                     <p style={{ fontWeight: 600, marginBottom: 6 }}>{r.instance_name}</p>
                     {r.error ? (
                       <p style={{ color: "var(--danger)", fontSize: 13 }}>Could not check: {r.error}</p>
-                    ) : r.diff?.status === "in_sync" ? (
-                      <p style={{ color: "var(--success)", fontSize: 13 }}>In sync with template.</p>
-                    ) : (
-                      <div style={{ fontSize: 13 }}>
-                        {(["custom_fields", "custom_field_choice_sets"] as const).map((key) => {
-                          const d = r.diff?.[key];
-                          if (!d || (!d.missing_on_instance.length && !d.extra_on_instance.length && !d.changed.length)) return null;
-                          return (
-                            <div key={key} style={{ marginBottom: 8 }}>
-                              <div style={{ color: "var(--muted)" }}>{key === "custom_fields" ? "Custom fields" : "Choice sets"}:</div>
-                              {d.missing_on_instance.length > 0 && <div style={{ marginLeft: 12, color: "var(--danger)" }}>missing on instance: {d.missing_on_instance.join(", ")}</div>}
-                              {d.extra_on_instance.length > 0 && <div style={{ marginLeft: 12, color: "var(--warning)" }}>extra on instance (not in template): {d.extra_on_instance.join(", ")}</div>}
-                              <ChangedItemsList items={d.changed} />
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
+                    ) : r.diff ? (
+                      <CustomFieldsDiffView diff={r.diff} />
+                    ) : null}
                   </div>
                 ))}
                 {pushResults.map((r, i) => (

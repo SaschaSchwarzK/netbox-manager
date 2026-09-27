@@ -25,6 +25,7 @@ def _to_out(record: models.DriftRecord, db: Session) -> schemas.DriftRecordOut:
         instance_name=instance.name if instance else "(deleted instance)",
         repo_target_id=record.repo_target_id,
         repo_target_name=target.name if target else "(deleted target)",
+        kind=record.kind,
         file_path=record.file_path,
         status=record.status,
         diff=diff_payload,

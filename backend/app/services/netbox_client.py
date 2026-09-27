@@ -71,20 +71,16 @@ def search_instance(base_url: str, token: str, verify_ssl: bool, query: str) -> 
         })
 
     vdcs = []
-    try:
-        for c in nb.dcim.virtual_device_contexts.filter(q=query):
-            vdcs.append({
-                "id": c.id,
-                "name": c.name,
-                "serial": None,
-                "type_display": str(c.device) if getattr(c, "device", None) else None,
-                "site": None,
-                "status": str(c.status) if getattr(c, "status", None) else None,
-                "url": f"{web_base}/dcim/virtual-device-contexts/{c.id}/",
-            })
-    except pynetbox.RequestError:
-        # NetBox versions before 4.1 don't have virtual-device-contexts; treat as "none found"
-        pass
+    for c in nb.dcim.virtual_device_contexts.filter(q=query):
+        vdcs.append({
+            "id": c.id,
+            "name": c.name,
+            "serial": None,
+            "type_display": str(c.device) if getattr(c, "device", None) else None,
+            "site": None,
+            "status": str(c.status) if getattr(c, "status", None) else None,
+            "url": f"{web_base}/dcim/virtual-device-contexts/{c.id}/",
+        })
 
     ip_addresses = []
     for ip in nb.ipam.ip_addresses.filter(q=query):
@@ -143,7 +139,7 @@ def search_instance(base_url: str, token: str, verify_ssl: bool, query: str) -> 
         pass
 
     try:
-        # NetBox 4.2+ dedicated MAC Address objects (an interface can have several).
+        # Dedicated MAC Address objects (an interface can have several).
         for m in nb.dcim.mac_addresses.filter(mac_address=query):
             assigned = getattr(m, "assigned_object", None)
             mac_addresses.append({
@@ -156,7 +152,7 @@ def search_instance(base_url: str, token: str, verify_ssl: bool, query: str) -> 
                 "url": f"{web_base}/dcim/mac-addresses/{m.id}/",
             })
     except pynetbox.RequestError:
-        pass  # older NetBox versions don't have this endpoint, or query rejected as invalid format
+        pass  # the free-form search query is not a valid MAC address
 
     return {
         "devices": devices, "virtual_machines": vms, "virtual_device_contexts": vdcs,

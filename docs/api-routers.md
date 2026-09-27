@@ -54,6 +54,7 @@ OIDC (OpenID Connect) and break-glass local-admin login flows. Session authentic
 uses a signed HttpOnly cookie (`SESSION_COOKIE`);
 actor attribution for write endpoints comes from the session cookie via
 `get_current_actor` / `get_current_user_optional`.
+Authentication and authorization are enforced unless `AUTHENTICATION_DISABLED=True`.
 
 ### Endpoints
 
@@ -104,9 +105,8 @@ actor attribution for write endpoints comes from the session cookie via
 **`GET /api/auth/me`**
 
 - Returns `auth_enabled`, `oidc_enabled`, `local_login_enabled`, `authenticated`,
-  `user`, `role`, and `app_admin`. `auth_enabled` means at least one configured method
-  requires a session. With no method configured, the development-mode response is
-  authenticated with the implicit admin context.
+  `user`, `role`, and `app_admin`. With authentication explicitly disabled, the response
+  has `auth_enabled=false`, `authenticated=true`, and an unrestricted admin context.
 
 ---
 
@@ -565,7 +565,7 @@ stored encrypted via `crypto.encrypt` and **never** returned in the
 **`DELETE /api/instances/{instance_id}`** (204)
 
 - Requires app-level admin. 404 "Instance not found." if missing.
-- Deletes the row and its unified/legacy scope rows, commits; no body returned.
+- Deletes the row and its access-mapping rows, commits; no body returned.
 
 **`POST /api/instances/{instance_id}/test`** — `ConnectionTestResult`
 
@@ -651,22 +651,22 @@ support partial MAC matching.
   `serial` always null; `type_display` = role; `url` →
   `{base_url}/virtualization/virtual-machines/{id}/`.
 - **Virtual device contexts** (`nb.dcim.virtual_device_contexts.filter(q=query)`):
-  wrapped in `try/except pynetbox.RequestError` — NetBox versions before 4.1
-  lack this endpoint and it's treated as "none found" rather than an error.
+  `type_display` = parent device; `url` →
+  `{base_url}/dcim/virtual-device-contexts/{id}/`.
 - **IP addresses** (`nb.ipam.ip_addresses.filter(q=query)`):
   `name` = the IP address; `type_display` = assigned object or `(unassigned)`;
   `url` → `{base_url}/ipam/ip-addresses/{id}/`.
 - **Prefixes** (`nb.ipam.prefixes.filter(q=query)`):
   `name` = the CIDR prefix; `type_display` = role;
   `url` → `{base_url}/ipam/prefixes/{id}/`.
-- **MAC addresses** — three passes, each wrapped in `try/except pynetbox.RequestError`
-  (invalid MAC format or missing endpoint → skip, not an error):
+- **MAC addresses** — three passes; invalid MAC formats are skipped rather than failing
+  the complete free-form search:
   1. `nb.dcim.interfaces.filter(mac_address=query)` — physical interfaces;
      `type_display` → `Interface: {device}/{iface.name}`.
   2. `nb.virtualization.interfaces.filter(mac_address=query)` — VM interfaces;
      `type_display` → `VM interface: {vm}/{iface.name}`.
-  3. `nb.dcim.mac_addresses.filter(mac_address=query)` — NetBox 4.2+
-     dedicated MAC Address objects; `type_display` → `Assigned to: ...` or
+  3. `nb.dcim.mac_addresses.filter(mac_address=query)` — dedicated MAC Address
+     objects; `type_display` → `Assigned to: ...` or
      `(unassigned)`.
 
 ---
@@ -779,7 +779,7 @@ participate in opt-in visibility; global rows never reveal a concretely scoped r
 | DELETE | `/api/access/mappings/{mapping_id}` | Delete an access mapping (204) |
 
 Mapping management and known-group discovery require app-level admin: a bootstrap admin
-group, a global admin mapping, or auth-disabled/local-admin mode. `role` must be null or
+group, a global admin mapping, or explicitly auth-disabled/local-admin mode. `role` must be null or
 `viewer`/`editor`/`admin`; `resource_type` must be `*`, `instance`, or `github_target`.
 Global scope forces `resource_id="*"`. Concrete IDs must exist (404 otherwise), and a group
 may have only one row per scope (duplicate requests return 400). A null role is a
@@ -804,7 +804,7 @@ visibility-only grant.
 Create/delete require app-level admin. Update requires app admin or a scoped admin mapping
 for that visible target. Updates reject empty names/branches, duplicate names, and repositories
 outside `owner/repo` form; a blank/omitted PAT preserves the encrypted PAT. Deletion also
-removes unified and legacy scope rows for the target.
+removes access-mapping rows for the target.
 
 The new-settings test accepts optional fields plus optional `id`. Without `id`, app-admin and
 repo/branch/PAT are required. With `id`, the caller needs resource-admin rights and omitted
