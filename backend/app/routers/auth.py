@@ -84,7 +84,7 @@ async def logout():
 
 @router.post("/local-login")
 async def local_login(payload: schemas.LocalLoginRequest, request: Request):
-    if not settings.local_admin_enabled:
+    if settings.authentication_disabled or not settings.local_admin_enabled:
         raise HTTPException(403, "Local admin login is not configured.")
     client_host = request.client.host if request.client else "unknown"
     retry_after = local_login_retry_after(client_host)
@@ -121,18 +121,18 @@ async def local_login(payload: schemas.LocalLoginRequest, request: Request):
 @router.get("/me")
 async def me(request: Request, ctx: AccessContext = Depends(get_access_context)):
     user = get_current_user_optional(request)
-    if not settings.auth_required:
+    if settings.authentication_disabled:
         return {
             "auth_enabled": False,
-            "oidc_enabled": oauth is not None,
-            "local_login_enabled": settings.local_admin_enabled,
+            "oidc_enabled": False,
+            "local_login_enabled": False,
             "authenticated": True,
             "user": None,
             "role": ctx.role,
             "app_admin": ctx.app_admin,
         }
     return {
-        "auth_enabled": settings.auth_required,
+        "auth_enabled": True,
         "oidc_enabled": oauth is not None,
         "local_login_enabled": settings.local_admin_enabled,
         "authenticated": user is not None,

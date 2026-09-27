@@ -88,7 +88,7 @@ def get_current_user_optional(request) -> dict | None:
 def get_current_actor(request) -> dict:
     """
     Identity to attribute an action to, for audit logging. Falls back to an
-    explicit "anonymous" marker when OIDC isn't configured, so audit entries
+    explicit "anonymous" marker when authentication is disabled, so audit entries
     are never silently missing a value — it's obvious from the record itself
     that auth was off rather than that logging failed.
     """
@@ -99,10 +99,10 @@ def get_current_actor(request) -> dict:
 
 
 # --- OIDC client ---
-# `oauth` stays None when NBM_OIDC_ISSUER isn't set, so the app can still run
-# (with auth disabled) for local development without a real identity provider.
+# The OIDC client is created only when authentication is enabled and the full
+# OIDC configuration is present.
 oauth = None
-if settings.oidc_issuer:
+if not settings.authentication_disabled and settings.oidc_enabled:
     from authlib.integrations.starlette_client import OAuth
 
     oauth = OAuth()

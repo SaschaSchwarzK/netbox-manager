@@ -1,0 +1,87 @@
+name: Bug report
+description: Report reproducible incorrect or unexpected behavior
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve NetBox Manager. Remove credentials, tokens, cookies, and other secrets from everything you submit.
+
+  - type: input
+    id: version
+    attributes:
+      label: NetBox Manager version
+      description: Provide the container tag or image digest you are running.
+      placeholder: v1.2.3 or ghcr.io/saschaschwarzk/netbox-manager@sha256:...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment method
+      options:
+        - Docker
+        - Docker Compose
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem description
+      description: Clearly describe what went wrong and its impact.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest reliable sequence that reproduces the problem.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the host OS/architecture, browser, NetBox version, and relevant identity provider.
+      placeholder: Linux amd64, Firefox 145, NetBox 4.x, Keycloak
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste only the relevant section and remove all secrets and personal data.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched the existing issues for duplicates.
+          required: true
+        - label: I removed credentials, tokens, cookies, and other sensitive data.
+          required: true
+

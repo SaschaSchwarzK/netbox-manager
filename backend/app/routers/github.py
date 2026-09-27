@@ -148,8 +148,5 @@ def delete_target(
     db.query(models.AccessMapping).filter_by(
         resource_type="github_target", resource_id=target_id
     ).delete(synchronize_session=False)
-    db.query(models.ScopeMapping).filter_by(
-        resource_type="github_target", resource_id=target_id
-    ).delete(synchronize_session=False)
     db.delete(target)
     db.commit()

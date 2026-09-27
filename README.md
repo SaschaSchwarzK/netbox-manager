@@ -18,23 +18,52 @@ For application workflows and annotated screenshot placeholders, see the
 
 ## Quick start
 
-1. Generate an encryption key for stored NetBox tokens / GitHub PATs:
+1. Pull the latest release from GitHub Container Registry:
 
    ```bash
-   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   docker pull ghcr.io/saschaschwarzk/netbox-manager:latest
    ```
 
-2. Copy the backend env file and paste the key in:
+2. Download the environment template and generate the encryption key used for stored NetBox
+   tokens and GitHub PATs:
 
    ```bash
-   cp backend/.env.example backend/.env
-   # edit backend/.env and set NBM_SECRET_KEY to the generated value
+   curl -fsSL \
+     https://raw.githubusercontent.com/SaschaSchwarzK/netbox-manager/main/backend/.env.example \
+     -o netbox-manager.env
+
+   docker run --rm \
+     --entrypoint /app/venv/bin/python \
+     ghcr.io/saschaschwarzk/netbox-manager:latest \
+     -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
    ```
 
-3. Build and start everything:
+   Put the generated value in `NBM_SECRET_KEY` inside `netbox-manager.env`. Configure OIDC or the
+   local administrator in the same file. For an explicitly open development instance, set
+   `AUTHENTICATION_DISABLED=True`. Authentication remains enforced when this variable is false,
+   malformed, or absent.
+
+3. Create the persistent volumes and start the container:
 
    ```bash
-   docker compose up --build
+   docker volume create netbox-manager_dbdata
+   docker volume create netbox-manager_certdata
+
+   docker run --detach \
+     --name netbox-manager \
+     --restart unless-stopped \
+     --env-file ./netbox-manager.env \
+     --publish 8443:8443 \
+     --volume netbox-manager_dbdata:/app/data \
+     --volume netbox-manager_certdata:/app/certs \
+     --read-only \
+     --tmpfs /tmp:size=64m,mode=1777 \
+     --cap-drop ALL \
+     --security-opt no-new-privileges=true \
+     --memory 256m \
+     --cpus 1.0 \
+     --pids-limit 128 \
+     ghcr.io/saschaschwarzk/netbox-manager:latest
    ```
 
 4. Open the UI at https://localhost:8443. Swagger UI is available at
@@ -42,8 +71,8 @@ For application workflows and annotated screenshot placeholders, see the
    creates a self-signed certificate, so browsers will show a trust warning until you replace it
    with a certificate trusted by your environment.
 
-To run with Docker directly instead of Compose, use the included launcher. Pass `--build` when
-the image needs to be built or rebuilt; omit it to start an existing image:
+To update later, pull `latest` again and recreate the container while keeping both named volumes.
+The included launcher remains available for a checked-out development copy:
 
 ```bash
 ./run-docker.sh --build
@@ -86,21 +115,6 @@ To install a trusted certificate, replace `cert.pem` and `key.pem` in the certif
 recreate the container. If either file is missing, the application generates a new self-signed
 pair during startup.
 
-Older releases ran the backend as root. Before starting this version against an existing
-`netbox-manager_dbdata` volume, change its ownership once while the old stack is stopped:
-
-```bash
-docker compose down
-docker run --rm --user 0:0 \
-  -v netbox-manager_dbdata:/data \
-  --entrypoint chown \
-  cgr.dev/chainguard/wolfi-base:latest -R 65532:65532 /data
-docker compose up -d --build
-```
-
-The ownership step is unnecessary for a fresh volume. If Compose uses a different project name,
-replace `netbox-manager_dbdata` with the name shown by `docker volume ls`.
-
 ## How device-types are stored
 
 There is **no database table for device-types**. Instead:
@@ -111,8 +125,6 @@ There is **no database table for device-types**. Instead:
 - Saving in the editor is a commit — optionally routed through a PR instead of committing straight to the branch. GitHub's file SHA is used for optimistic concurrency, so if the file changed on GitHub since you loaded it, the save is rejected with a clear message rather than silently overwriting someone else's edit.
 - The SQLite DB only holds NetBox instance configs (encrypted tokens), GitHub target configs (encrypted PAT), and a push-history log — no device-type content.
 
-One consequence: listing device types fetches and parses every file in the repo to show manufacturer/model/slug in the table, so it scales fine for an internal library of tens–low hundreds of device types, but would be slow against something the size of the full community library (thousands of files). Worth adding caching or a lighter-weight listing (e.g. parsing just the front-matter, or paginating) if you point this at a very large repo.
-
 ## What's implemented
 
 - **NetBox instance management** — add/edit/remove instances, tokens encrypted at rest, "Test connection" hits `/api/status/`. Each instance can carry free-form **tags** (e.g. `prod`, `region:eu`) and an optional **"require an approved, merged PR"** flag.
@@ -120,7 +132,7 @@ One consequence: listing device types fetches and parses every file in the repo 
 - **Device-type editor** — tabs for base attributes, interfaces, console ports/server ports, power ports/outlets, rear/front ports, device bays, and module bays. Each component tab is an editable grid with a bulk-add pattern helper (e.g. `GigabitEthernet1/0/{1-48}`) and a live YAML preview.
 - **Import** — upload a `.yml`/`.yaml` file; it opens as an in-memory, unsaved draft (nothing is written to GitHub until the first save).
 - **PR-only workflow** — there is no direct-commit path. Every save opens (or adds a commit to) a pull request, with an auto-generated, editable commit message and PR description summarizing what changed (component counts, added/removed fields). Re-saving a device type that already has an open PR adds to that same PR instead of forking a new one.
-- **Cross-instance search** (**Search** page) — finds devices, virtual machines, virtual device contexts, IP addresses, prefixes, and MAC addresses by name, serial, address, or MAC, fanned out across every selected NetBox instance in parallel. Devices/VMs/VDCs/IPs/prefixes use NetBox's `q` quick-search filter; MAC lookups use an exact `mac_address` filter (against both interface-level MACs and, on NetBox 4.2+, the dedicated MAC Address object) since NetBox doesn't support partial MAC matching. A malformed MAC/IP query is caught and treated as "no results" for that lookup rather than failing the whole search.
+- **Cross-instance search** (**Search** page) — finds devices, virtual machines, virtual device contexts, IP addresses, prefixes, and MAC addresses by name, serial, address, or MAC, fanned out across every selected NetBox instance in parallel. Devices/VMs/VDCs/IPs/prefixes use NetBox's `q` quick-search filter; MAC lookups use an exact `mac_address` filter against both interface-level and dedicated MAC Address objects since NetBox doesn't support partial MAC matching. A malformed MAC/IP query is caught and treated as "no results" for that lookup rather than failing the whole search.
 
 ### Change safety across many instances
 
@@ -131,19 +143,23 @@ One consequence: listing device types fetches and parses every file in the repo 
 
 ### Login (OIDC or break-glass local admin)
 
-Authentication is required when either `NBM_OIDC_ISSUER` is set or both
-`NBM_LOCAL_ADMIN_USER` and `NBM_LOCAL_ADMIN_PASSWORD` are set. The local account is a
-break-glass administrator for IdP outages: it has app-admin access and bypasses resource
-scoping. Use a long random password and enable `NBM_SESSION_COOKIE_SECURE` behind HTTPS.
-`NBM_REQUIRE_AUTH=true` makes the backend refuse to start unless at least one authentication
-method is complete. With neither method configured, the app remains open for local development
-and emits a startup warning.
+Authentication and authorization are enforced by default. Configure all three OIDC values
+(`NBM_OIDC_ISSUER`, `NBM_OIDC_CLIENT_ID`, and `NBM_OIDC_CLIENT_SECRET`) or both local-admin
+credentials. An incomplete method or no complete method makes the backend refuse to start.
+
+`AUTHENTICATION_DISABLED=True` is the only way to disable authentication and authorization.
+This variable deliberately has no `NBM_` prefix. When enabled, every request receives unrestricted
+administrator access, so use it only for an intentionally open development deployment.
+
+The local account is a break-glass administrator for identity-provider outages: it has app-admin
+access and bypasses resource scoping. Use a long random password and keep
+`NBM_SESSION_COOKIE_SECURE=true` when serving the application over HTTPS.
 
 Once configured:
 - `GET /api/auth/login` starts the standard OIDC authorization-code flow (via [Authlib](https://docs.authlib.org/)), redirecting to your provider.
 - `GET /api/auth/callback` exchanges the code for tokens; Authlib validates the ID token's signature (against the provider's published JWKS), issuer, audience, expiry, and nonce as part of that exchange — this app doesn't hand-roll any of that verification.
 - The verified claims (`sub`, `email`, `name`, and the group-membership claim named by `NBM_OIDC_GROUPS_CLAIM`) are signed into an httponly session cookie (`itsdangerous`, 12h expiry) — there's no server-side session store, so any backend replica can validate the cookie independently.
-- Every `/api/*` route except `/api/auth/*` and `/api/health` requires a valid session once either authentication method is configured; unauthenticated requests get a plain 401.
+- Every `/api/*` route except `/api/auth/*` and `/api/health` requires a valid session unless authentication is explicitly disabled; unauthenticated requests get a plain 401.
 - The frontend checks `/api/auth/me` on load: if not authenticated, it shows a sign-in screen instead of the app; once signed in, the sidebar shows the user's name and groups with a sign-out button.
 
 Setting this up requires registering this app with your identity provider as a confidential web app/client, with `NBM_OIDC_REDIRECT_URI` as an allowed redirect URI. See `.env.example` for the full list of variables and provider-specific notes on the groups claim (Keycloak, Entra ID/Azure AD, and Okta all expose group membership differently).
@@ -158,9 +174,9 @@ Setting this up requires registering this app with your identity provider as a c
 
 ## Troubleshooting
 
-- **The container reports a read-only database or permission error** — the runtime intentionally runs as UID/GID `65532`. Apply the one-time existing-volume ownership command in **Container layout** above, then restart the service.
 - **The UI loads but `/api/` returns 502** — Caddy is running but the Uvicorn child process failed. Run `docker compose logs app`; the most common cause is the secret-key issue below.
 - **Backend crashes on startup with a Fernet/base64 error** — this means `NBM_SECRET_KEY` in `backend/.env` is still the placeholder value (or `backend/.env` was never created from `backend/.env.example` at all). The startup error now names this explicitly and tells you the exact command to generate a real key; see Quick start above.
+- **Backend refuses to start because no authentication method is configured** — configure complete OIDC or local-admin credentials. For an intentionally open deployment, set `AUTHENTICATION_DISABLED=True` explicitly.
 
 ### Syslog forwarding
 
@@ -183,8 +199,7 @@ global role does not reveal resources scoped to other groups.
 A user's highest mapped role wins, with `NBM_DEFAULT_ROLE` as the fallback.
 `NBM_BOOTSTRAP_ADMIN_GROUPS` remains the permanent app-admin bootstrap. App admins manage mappings
 and create/delete resources; a resource-scoped admin may edit that resource and now satisfies its
-`requires_approved_pr` admin gate. Legacy `role_mappings` and `scope_mappings` rows are expanded
-once at startup into access mappings and are never read for authorization afterward.
+`requires_approved_pr` admin gate.
 
 ### Custom-fields template
 
@@ -202,7 +217,8 @@ A second GitHub-backed workflow, parallel to device-types: a single YAML file pe
 
 Every device-type action — create, update, import, and delete on GitHub, plus every push to a NetBox instance — is logged to the `push_history` table with **who did it**: `actor_sub`, `actor_name`, and `actor_email`, resolved from the session cookie at request time (so it reflects whoever was actually logged in for that specific call, not a static setting). Logging happens on both success and failure, including errors raised before any GitHub/NetBox API call completes, so a rejected or failed action still shows up rather than silently vanishing.
 
-When OIDC is off, entries are attributed to `"anonymous (auth disabled)"` rather than being left blank — the point is that a blank actor should never be ambiguous between "logging broke" and "auth was off."
+When authentication is explicitly disabled, entries are attributed to `"anonymous (auth disabled)"`
+rather than being left blank.
 
 Because every GitHub commit in this app goes through one shared PAT, GitHub's own commit authorship can't show the real person who requested a change — so the backend appends a `Requested via NetBox Manager by: <name> <email>` trailer to every PR body server-side, after whatever the user typed in the editable description field. This happens unconditionally on the backend, so it survives even if the user's local edits to that field happened to remove it.
 
@@ -210,19 +226,31 @@ The **Audit Log** page lists all of this, newest first: timestamp, actor, action
 
 ## Known limitations
 
-- **Audit log isn't scope-filtered.** An editor blocked from seeing a scoped instance in Search/Fleet/push panels can still see audit log entries that mention it by name. This is a deliberate scope-cut for this first pass, not an oversight — flagged here so it's a known gap rather than a surprise. Filtering it would follow the same `filter_scoped()` pattern already used elsewhere.
-- **"Diff preview" vs. "passive reporting" is a judgment call.** The spec that shaped this said Editor gets "diff previews" while Viewer gets read-only "Drift" — implemented as: the on-demand push-time diff preview (`diff-with-netbox`, custom-fields `/diff`) requires editor, while the Drift page's list and "Check now" stay viewer-accessible, since the spec explicitly named Drift as viewer-visible. Coverage checks (the per-device-type "which instances have this" button) are similarly left viewer-accessible, on the same reasoning.
-- **Access-mapping changes take effect on the next request**, not retroactively inside a request already in flight — the session cookie carries identity/groups, not a cached role.
-- **Legacy RBAC tables remain read-only.** `role_mappings` and `scope_mappings` are retained rather than dropped so a downgrade can still use the original data.
-- **Changing a GitHub target's repo, branch, or paths does not move files.** Later reads and drift checks use the new location.
+### Authorization and auditing
 
-## Known limitations (pre-existing)
+- Audit entries are not scope-filtered, so they can name resources the viewer cannot otherwise see.
+- Audit logging currently covers device-type GitHub saves and NetBox pushes, but not configuration
+  changes or drift checks.
+- Access-mapping changes apply to the next request; they do not alter a request already in progress.
+- On-demand diff previews require the editor role, while passive drift and coverage checks remain
+  available to viewers.
 
-- **No Alembic migrations, but schema changes are no longer destructive.** Tables are created with `Base.metadata.create_all()`, and on every startup `app/migrations.py` diffs each mapped table's actual columns against the models and adds anything missing (`ALTER TABLE ADD COLUMN`, with the model's default). It never removes, renames, or retypes a column — only adds — so pulling an update that adds a field no longer requires wiping the SQLite volume. A prior version of this README said otherwise; that's fixed now.
-- **Diff/drift now compares full attributes, not just name and type.** `get_existing_device_type()` fetches every field each component template schema actually defines (`maximum_draw`/`allocated_draw` on power ports, `power_port`/`feed_leg` on outlets, `positions` on rear ports, `rear_port`/`rear_port_position` on front ports, `position` on module bays, `poe_mode`/`poe_type` on interfaces, `description` everywhere), and the diff engine (`field_level_diff()`) reports exactly which fields differ on a changed item — e.g. `{"field": "maximum_draw", "source": 60, "existing": 30}` — instead of a bare "this item changed" flag. The same engine backs both device-type diffs and the custom-fields template diff.
-- **Drift detection has no explicit instance↔device-type mapping** — it infers candidate pairs from push history, so a device type that's only ever been pushed manually outside this tool won't be tracked.
-- **Do not run with no authentication method outside a trusted development network.** A complete local-admin credential pair requires login even without OIDC; with neither OIDC nor local admin configured the API is deliberately open and logs a startup warning. Set `NBM_REQUIRE_AUTH=true` to fail closed.
-- **Audit log covers device-type actions only** — instance/GitHub-target CRUD and drift checks aren't currently logged with an actor. Extending the same `_log_action`-style pattern to those is straightforward if needed.
-- **NetBox token expiry detection is best-effort** — it relies on the token being able to see its own record via `/api/users/tokens/` and being the only one visible. Many tokens won't have permission to that endpoint at all (shows as "unknown"), which is expected, not a bug.
-- **Coverage checks are on-demand per device type**, not a pre-computed fleet-wide matrix — checking coverage for every device type in a large repo against every instance would mean N×M live NetBox calls; the per-row button keeps that cost opt-in.
-- **Custom-fields drift isn't in the scheduled background job** — the device-type Drift page runs on a timer; the custom-fields drift check is on-demand only (the "Check drift" button), by design, since the request was for "a function to check" rather than continuous monitoring. Wiring it into the same APScheduler job would be a small follow-up.
+### Synchronization and scale
+
+- Device-type drift candidates are inferred from successful push history rather than an explicit
+  instance-to-device-type assignment.
+- Coverage checks run on demand for one device type instead of precomputing a fleet-wide matrix.
+- Custom-field drift checks are on demand and are not part of the scheduled device-type drift job.
+- Changing a GitHub target's repository, branch, or paths changes future lookups but does not move
+  existing files.
+- Listing every device type from a very large repository can be slow because each YAML file is
+  fetched and parsed.
+- NetBox token-expiry reporting is best-effort and can be unknown when the token cannot uniquely
+  read its own token record.
+
+## Feedback and contributions
+
+Use the GitHub issue forms to [report a bug](https://github.com/SaschaSchwarzK/netbox-manager/issues/new?template=bug_report.yml)
+or [request a feature](https://github.com/SaschaSchwarzK/netbox-manager/issues/new?template=feature_request.yml).
+Search existing issues first and never include API tokens, credentials, session cookies, or other
+sensitive information.

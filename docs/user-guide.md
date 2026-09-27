@@ -29,6 +29,9 @@ Depending on the deployment, the sign-in screen can offer:
 - **Break-glass local administrator login** for recovery when the identity provider is unavailable.
 
 The local account is a full application administrator and should only be used for recovery.
+Authentication is enforced by default. An intentionally open deployment must explicitly set
+`AUTHENTICATION_DISABLED=True`; that mode also disables authorization and grants unrestricted
+access to every request.
 
 > **Screenshot placeholder:** Login screen showing SSO and local-admin options.  
 > Suggested file: `docs/images/user-guide/login.png`

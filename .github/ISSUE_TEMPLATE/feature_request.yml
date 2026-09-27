@@ -1,0 +1,56 @@
+name: Feature request
+description: Propose an improvement or new capability
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem first so the proposed solution can be evaluated in context.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What workflow is difficult or impossible today, and who is affected?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the desired behavior and user experience.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe current workarounds or other approaches you considered.
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and acceptance criteria
+      description: List the concrete outcomes that would make this request complete.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add mockups, examples, related issues, or relevant NetBox documentation.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched the existing issues and feature requests for duplicates.
+          required: true
+        - label: This request describes one focused feature or improvement.
+          required: true
+

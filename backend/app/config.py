@@ -1,3 +1,4 @@
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -8,7 +9,11 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173", "https://localhost:8443"]
     drift_check_interval_hours: int = 6
 
-    # OIDC — leave oidc_issuer empty to run with auth disabled (local/dev only).
+    # Authentication is fail-closed. This deliberately has no NBM_ prefix:
+    # AUTHENTICATION_DISABLED=True is the only way to disable authentication and authorization.
+    authentication_disabled: bool = Field(default=False, validation_alias="AUTHENTICATION_DISABLED")
+
+    # OIDC
     oidc_issuer: str = ""
     oidc_client_id: str = ""
     oidc_client_secret: str = ""
@@ -19,7 +24,6 @@ class Settings(BaseSettings):
     session_cookie_secure: bool = True
     local_admin_user: str = ""
     local_admin_password: str = ""
-    require_auth: bool = False
     default_role: str = "viewer"  # role for an authenticated user whose groups match no access mapping role
     # Comma-separated OIDC group name(s) that always resolve to admin, regardless of what's in the
     # access mappings. This is the group reference that tells NetBox Manager who's allowed to
@@ -29,13 +33,23 @@ class Settings(BaseSettings):
     # first access mapping, since creating one requires already being admin.
     bootstrap_admin_groups: str = ""
 
+    @field_validator("authentication_disabled", mode="before")
+    @classmethod
+    def authentication_is_disabled_only_by_explicit_true(cls, value) -> bool:
+        # Fail closed for missing, false, malformed, or differently-cased values.
+        return value is True or value == "True"
+
     @property
     def local_admin_enabled(self) -> bool:
         return bool(self.local_admin_user.strip() and self.local_admin_password.strip())
 
     @property
-    def auth_required(self) -> bool:
-        return bool(self.oidc_issuer) or self.local_admin_enabled
+    def oidc_enabled(self) -> bool:
+        return bool(
+            self.oidc_issuer.strip()
+            and self.oidc_client_id.strip()
+            and self.oidc_client_secret.strip()
+        )
 
     # Syslog forwarding of the audit log — config-file only, deliberately not
     # editable from the UI (the UI shows these values read-only plus a test button).
