@@ -12,9 +12,9 @@ For application workflows and annotated screenshot placeholders, see the
 
 ## Stack
 
-- **Backend:** FastAPI + SQLAlchemy (SQLite) + `pynetbox` for the NetBox API + `PyGithub` for reading/committing device-type files.
+- **Backend:** FastAPI served by Uvicorn + SQLAlchemy (SQLite) + `pynetbox` for the NetBox API + `PyGithub` for reading/committing device-type files.
 - **Frontend:** React + TypeScript + Vite.
-- **Deployment:** Docker Compose (backend, frontend/nginx — no separate database service to run).
+- **Deployment:** one minimal Docker container running Caddy and the FastAPI application, with no separate database service.
 
 ## Quick start
 
@@ -37,9 +37,58 @@ For application workflows and annotated screenshot placeholders, see the
    docker compose up --build
    ```
 
-4. Open the UI at http://localhost:8080. The API is at http://localhost:8000/docs (Swagger UI).
-   Hitting http://localhost:8000/ directly with no path will show a small JSON banner — that's
-   expected, the actual app lives behind the frontend on :8080 (or under /docs for the API).
+4. Open the UI at https://localhost:8443. Swagger UI is available at
+   https://localhost:8443/docs through the same Caddy endpoint. On first startup the application
+   creates a self-signed certificate, so browsers will show a trust warning until you replace it
+   with a certificate trusted by your environment.
+
+To run with Docker directly instead of Compose, use the included launcher. Pass `--build` when
+the image needs to be built or rebuilt; omit it to start an existing image:
+
+```bash
+./run-docker.sh --build
+./run-docker.sh
+```
+
+The script uses the same environment file, persistent volume, port, read-only filesystem, and
+security restrictions as the Compose deployment. Run `./run-docker.sh --help` to see configuration
+overrides and the `--replace` option.
+
+Both launch methods default to one CPU, 256 MiB of memory, and 128 processes. The direct-Docker
+launcher allows these limits to be changed with `CPU_LIMIT`, `MEMORY_LIMIT`, and `PIDS_LIMIT`.
+
+Container behavior can be checked locally with `./scripts/container-smoke-test.sh IMAGE_NAME`.
+The same checks run in CI together with a Trivy scan for fixable high and critical vulnerabilities.
+
+### Container layout
+
+The root `Dockerfile` has three stages: Caddy is compiled in the free Chainguard Go development
+image, Python dependencies and the React frontend are built in the free Chainguard Python
+development image, and only the resulting artifacts are copied into the minimal Chainguard Python
+runtime. The deployed container runs as UID/GID `65532`, drops all Linux capabilities, has a
+read-only root filesystem, and writes only to the SQLite and certificate volumes plus a small
+`/tmp` tmpfs. The database is always `/app/data/netbox_manager.db`; certificates are always
+`/app/certs/cert.pem` and `/app/certs/key.pem`. These paths cannot be overridden with environment
+variables.
+
+To install a trusted certificate, replace `cert.pem` and `key.pem` in the certificate volume and
+recreate the container. If either file is missing, the application generates a new self-signed
+pair during startup.
+
+Older releases ran the backend as root. Before starting this version against an existing
+`netbox-manager_dbdata` volume, change its ownership once while the old stack is stopped:
+
+```bash
+docker compose down
+docker run --rm --user 0:0 \
+  -v netbox-manager_dbdata:/data \
+  --entrypoint chown \
+  cgr.dev/chainguard/wolfi-base:latest -R 65532:65532 /data
+docker compose up -d --build
+```
+
+The ownership step is unnecessary for a fresh volume. If Compose uses a different project name,
+replace `netbox-manager_dbdata` with the name shown by `docker volume ls`.
 
 ## How device-types are stored
 
@@ -98,7 +147,8 @@ Setting this up requires registering this app with your identity provider as a c
 
 ## Troubleshooting
 
-- **`frontend-1 exited with code 1` / nginx: "host not found in upstream 'backend'"** — this means the **backend** container crashed (nginx can't even resolve the `backend` hostname if that container never came up), and nginx's default behavior is to refuse to start at all if a `proxy_pass` hostname can't be resolved at config-load time. `nginx.conf` now resolves the backend lazily (via a `resolver` + variable), so the frontend starts and serves fine even if the backend is down, returning a 502 for `/api/` instead of crash-looping — check the **backend** container's logs for the actual failure. The most common cause is the one below.
+- **The container reports a read-only database or permission error** — the runtime intentionally runs as UID/GID `65532`. Apply the one-time existing-volume ownership command in **Container layout** above, then restart the service.
+- **The UI loads but `/api/` returns 502** — Caddy is running but the Uvicorn child process failed. Run `docker compose logs app`; the most common cause is the secret-key issue below.
 - **Backend crashes on startup with a Fernet/base64 error** — this means `NBM_SECRET_KEY` in `backend/.env` is still the placeholder value (or `backend/.env` was never created from `backend/.env.example` at all). The startup error now names this explicitly and tells you the exact command to generate a real key; see Quick start above.
 
 ### Syslog forwarding

@@ -102,7 +102,9 @@ def start_scheduler():
         return  # set NBM_DRIFT_CHECK_INTERVAL_HOURS=0 to disable periodic checks entirely
     from apscheduler.schedulers.background import BackgroundScheduler
 
-    scheduler = BackgroundScheduler()
+    # Pin the scheduler to UTC so the minimal runtime does not need an OS
+    # timezone database just to discover the container's local timezone.
+    scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(
         _run_scheduled_drift_check,
         "interval",

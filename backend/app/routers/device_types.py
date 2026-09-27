@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app import crypto, models, schemas
 from app.auth import get_current_actor
 from app.database import get_db
-from app.devicetype_schema import DeviceType
+from app.devicetype_schema import COMPONENT_ENDPOINTS, DeviceType
 from app.rbac import AccessContext, filter_scoped, get_access_context, has_role_at_least, require_role, require_visible, role_for_resource
 from app.services import diff as diff_mod
 from app.services import github_repo, netbox_client
@@ -63,6 +63,17 @@ def _log_action(db: Session, *, repo_target_id: str, file_path: str, target_name
         actor_sub=actor.get("sub"), actor_name=actor.get("name"), actor_email=actor.get("email"),
     ))
     db.commit()
+
+
+def _to_preview(validated: DeviceType) -> schemas.DeviceTypePreview:
+    """Shared by both bulk-import preview endpoints (GitHub-library and NetBox-instance sources)."""
+    data = validated.to_yaml_dict()
+    component_counts = {key: len(data.get(key) or []) for key in COMPONENT_ENDPOINTS}
+    component_counts = {k: v for k, v in component_counts.items() if v}
+    return schemas.DeviceTypePreview(
+        manufacturer=validated.manufacturer, model=validated.model, slug=validated.slug,
+        component_counts=component_counts, custom_fields=validated.custom_fields,
+    )
 
 
 @router.get("", response_model=list[schemas.DeviceTypeSummary])
@@ -306,6 +317,30 @@ def bulk_import_scan(
     return entries
 
 
+@router.post("/bulk-import/preview", response_model=schemas.DeviceTypePreview)
+def bulk_import_preview(
+    target_id: str, payload: schemas.BulkImportPreviewRequest, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
+    """
+    Fetches and parses one candidate file on demand, so the picker can show
+    its component counts and custom field values before it's imported —
+    deliberately separate from bulk_import_scan, which stays cheap by only
+    listing paths.
+    """
+    target = _get_target(target_id, db, ctx)
+    source_pat = payload.source_pat or crypto.decrypt(target.pat_encrypted)
+    try:
+        content = github_repo.get_file(source_pat, payload.source_repo, payload.source_branch, payload.path)
+    except Exception as exc:
+        raise _github_error_to_http(exc)
+    try:
+        validated = DeviceType(**content["payload"])
+    except Exception as exc:
+        raise HTTPException(422, f"Could not parse this file as a device type: {exc}")
+    return _to_preview(validated)
+
+
 @router.post("/bulk-import", response_model=schemas.BulkImportResult)
 def bulk_import(
     target_id: str, payload: schemas.BulkImportRequest, request: Request, db: Session = Depends(get_db),
@@ -403,6 +438,37 @@ def import_from_netbox_scan(
     except Exception as exc:
         raise HTTPException(502, f"Could not list device types from {instance.name}: {exc}")
     return [schemas.ImportFromNetboxScanEntry(**r) for r in results]
+
+
+@router.post("/import-from-netbox/preview", response_model=schemas.DeviceTypePreview)
+def import_from_netbox_preview(
+    target_id: str, payload: schemas.ImportFromNetboxPreviewRequest, db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("editor")),
+):
+    """
+    Fetches one candidate's full definition from the instance on demand
+    (component templates and custom field values included) so the picker can
+    show what's actually there before it's imported — the scan list above
+    stays cheap on purpose (no per-device-type detail).
+    """
+    _get_target(target_id, db, ctx)
+    instance = db.get(models.NetboxInstance, payload.instance_id)
+    if not instance or not filter_scoped([instance], "instance", ctx, db):
+        raise HTTPException(404, "NetBox instance not found.")
+    token = crypto.decrypt(instance.api_token_encrypted)
+    try:
+        fetched = netbox_client.get_existing_device_type(
+            instance.base_url, token, instance.verify_ssl, payload.manufacturer, payload.slug
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"Could not fetch this device type from {instance.name}: {exc}")
+    if fetched is None:
+        raise HTTPException(404, "No longer found on this instance.")
+    try:
+        validated = DeviceType(**fetched)
+    except Exception as exc:
+        raise HTTPException(422, f"NetBox returned a device type that doesn't match our schema: {exc}")
+    return _to_preview(validated)
 
 
 @router.post("/import-from-netbox", response_model=schemas.BulkImportResult)

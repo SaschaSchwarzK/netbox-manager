@@ -1,23 +1,27 @@
-version: "3.9"
-
 services:
-  backend:
-    build: ./backend
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
       - ./backend/.env
     volumes:
       - dbdata:/app/data
+      - certdata:/app/certs
     ports:
-      - "8000:8000"
-
-  frontend:
-    build: ./frontend
-    restart: unless-stopped
-    depends_on:
-      - backend
-    ports:
-      - "8088:80"
-
+      - "8443:8443"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 128
 volumes:
   dbdata:
+  certdata:

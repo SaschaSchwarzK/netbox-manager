@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { driftApi, DriftRecord } from "../api/client";
-import DiffView from "../components/DiffView";
+import DiffView, { summarizeDiff } from "../components/DiffView";
 
 const STATUS_COLORS: Record<string, string> = {
   in_sync: "var(--success)",
@@ -45,7 +45,7 @@ export default function DriftPage() {
       <div className="card">
         <table>
           <thead>
-            <tr><th>Instance</th><th>Device Type</th><th>Repo</th><th>Status</th><th>Last checked</th><th></th></tr>
+            <tr><th>Instance</th><th>Device Type</th><th>Repo</th><th>Status</th><th>Changes</th><th>Last checked</th><th></th></tr>
           </thead>
           <tbody>
             {records.map((r) => (
@@ -58,6 +58,7 @@ export default function DriftPage() {
                     <span className="status-dot" style={{ background: STATUS_COLORS[r.status] ?? "var(--muted)" }} />
                     {r.status}
                   </td>
+                  <td style={{ color: "var(--muted)", fontSize: 12.5 }}>{r.diff ? summarizeDiff(r.diff) : "—"}</td>
                   <td>{new Date(r.checked_at).toLocaleString()}</td>
                   <td>
                     {r.diff && (
@@ -69,7 +70,7 @@ export default function DriftPage() {
                 </tr>
                 {expanded === r.id && r.diff && (
                   <tr>
-                    <td colSpan={6} style={{ background: "var(--panel-raised)" }}>
+                    <td colSpan={7} style={{ background: "var(--panel-raised)" }}>
                       <DiffView diff={r.diff} />
                     </td>
                   </tr>
@@ -77,7 +78,7 @@ export default function DriftPage() {
               </Fragment>
             ))}
             {!loading && records.length === 0 && (
-              <tr><td colSpan={6} style={{ color: "var(--muted)" }}>
+              <tr><td colSpan={7} style={{ color: "var(--muted)" }}>
                 No drift data yet — nothing's been pushed to a NetBox instance yet, or a check hasn't run. Click "Check all now".
               </td></tr>
             )}

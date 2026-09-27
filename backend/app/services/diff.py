@@ -8,7 +8,7 @@ from app.devicetype_schema import COMPONENT_ENDPOINTS
 
 BASE_FIELDS = [
     "part_number", "u_height", "is_full_depth", "subdevice_role",
-    "airflow", "weight", "weight_unit", "comments",
+    "airflow", "weight", "weight_unit", "comments", "custom_fields",
 ]
 
 
