@@ -72,33 +72,6 @@ For application workflows and annotated screenshot placeholders, see the
    with a certificate trusted by your environment.
 
 To update later, pull `latest` again and recreate the container while keeping both named volumes.
-The included launcher remains available for a checked-out development copy:
-
-```bash
-./run-docker.sh --build
-./run-docker.sh
-```
-
-The script uses the same environment file, persistent volume, port, read-only filesystem, and
-security restrictions as the Compose deployment. Run `./run-docker.sh --help` to see configuration
-overrides and the `--replace` option.
-
-Both launch methods default to one CPU, 256 MiB of memory, and 128 processes. The direct-Docker
-launcher allows these limits to be changed with `CPU_LIMIT`, `MEMORY_LIMIT`, and `PIDS_LIMIT`.
-
-Container behavior can be checked locally with `./scripts/container-smoke-test.sh IMAGE_NAME`.
-The same checks run in CI together with a Trivy scan for fixable high and critical vulnerabilities.
-
-### Publishing a container release
-
-Run the **Release container** workflow from the repository's **Actions** tab and enter a semantic
-version such as `v1.2.3`. The workflow builds the image, runs the container smoke tests and Trivy
-scan, and then publishes `linux/amd64` and `linux/arm64` images to
-`ghcr.io/saschaschwarzk/netbox-manager`. Leave **Also update the latest tag** selected to publish
-the same image as `latest`.
-
-The workflow uses the built-in `GITHUB_TOKEN`; no registry secret is required. The repository or
-organization must permit GitHub Actions to create and write packages.
 
 ### Container layout
 
