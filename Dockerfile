@@ -6,10 +6,34 @@ ARG XCADDY_VERSION=v0.4.5
 FROM cgr.dev/chainguard/go:latest-dev@sha256:11b08ed26e99379f8df32197348c1a16093b15a071bbd2793125040982f46f91 AS caddy-builder
 ARG CADDY_VERSION
 ARG XCADDY_VERSION
+COPY security/go-fixes.txt /build/security/go-fixes.txt
 RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    go install github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION} && \
-    CGO_ENABLED=0 /root/go/bin/xcaddy build ${CADDY_VERSION} --output /out/caddy
+    --mount=type=cache,target=/root/.cache/go-build <<'EOF'
+set -eu
+go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
+replacements="$(awk '
+        function trim(value) { gsub(/^[ \t]+|[ \t]+$/, "", value); return value }
+        /^[ \t]*($|#)/ { next }
+        {
+            line = $0
+            sub(/[ \t]*#.*/, "", line)
+            count = split(line, fields, "=")
+            if (count != 2) {
+                print "Invalid go-fixes.txt entry: " $0 > "/dev/stderr"
+                exit 2
+            }
+            source = trim(fields[1])
+            target = trim(fields[2])
+            module = source
+            sub(/@.*/, "", module)
+            if (target ~ /^v[0-9]/) target = module "@" target
+            printf "--replace %s=%s ", source, target
+        }
+    ' /build/security/go-fixes.txt)"
+test -n "$replacements"
+# Intentional word splitting: each generated --replace pair is a separate xcaddy argument.
+CGO_ENABLED=0 /root/go/bin/xcaddy build "${CADDY_VERSION}" $replacements --output /out/caddy
+EOF
 
 FROM cgr.dev/chainguard/python:latest-dev@sha256:eb0d45dfc69fecb471d2eaee7a8eea281bf860578ef44cb85db1bfa8165c47fe AS app-builder
 USER root
