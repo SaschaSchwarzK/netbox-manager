@@ -54,6 +54,11 @@ def check_token_expiry(pat: str) -> dict:
         return {"known": False, "expires": None, "note": str(exc)}
 
 
+def base_dir_for_pattern(path_pattern: str) -> str:
+    """e.g. "device-types/{manufacturer}/{slug}.yml" -> "device-types" """
+    return path_pattern.split("{")[0].rsplit("/", 1)[0] if "{" in path_pattern else path_pattern
+
+
 def list_device_types(pat: str, repo_name: str, branch: str, base_dir: str) -> list[RepoFile]:
     """List every .yml/.yaml file under base_dir using the git trees API (single call, recursive)."""
     repo = _repo(pat, repo_name)

@@ -28,8 +28,7 @@ def _get_target(target_id: str, db: Session, ctx: AccessContext | None = None) -
 
 
 def _base_dir(target: models.GithubTarget) -> str:
-    # e.g. "device-types/{manufacturer}/{slug}.yml" -> "device-types"
-    return target.path_pattern.split("{")[0].rsplit("/", 1)[0] if "{" in target.path_pattern else target.path_pattern
+    return github_repo.base_dir_for_pattern(target.path_pattern)
 
 
 def _github_error_to_http(exc: Exception) -> HTTPException:

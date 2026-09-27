@@ -161,9 +161,12 @@ Use **Fleet** to check NetBox reachability, versions, installed plugins, respons
 available token-expiry information. Resolve connectivity or credential warnings before a large
 publish operation.
 
-Use **Drift** to see device types that differ from their GitHub source. Select **Check all now**
-for an on-demand refresh; otherwise the background schedule refreshes the data periodically when
-enabled by the administrator.
+Use **Drift** to see device types and custom-fields templates that differ from their GitHub source.
+This covers device types NetBox Manager has pushed before, and also device types that were created
+directly in a NetBox instance by hand — as long as their manufacturer and slug match something
+already committed to the repo, they're picked up automatically. Select **Check all now** for an
+on-demand refresh; otherwise the background schedule refreshes the data periodically when enabled
+by the administrator.
 
 ![Fleet health dashboard](images/user-guide/fleet.png)
 

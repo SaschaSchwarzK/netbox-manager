@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 
@@ -199,15 +199,28 @@ class InstanceDiffResult(BaseModel):
     error: Optional[str] = None
 
 
+class NamedListDiff(BaseModel):
+    missing_on_instance: list[str] = []
+    extra_on_instance: list[str] = []
+    changed: list[ChangedItem] = []
+
+
+class CustomFieldsDiffResult(BaseModel):
+    status: str  # in_sync / drift / error
+    custom_fields: Optional[NamedListDiff] = None
+    custom_field_choice_sets: Optional[NamedListDiff] = None
+
+
 class DriftRecordOut(BaseModel):
     id: str
     instance_id: str
     instance_name: str
     repo_target_id: str
     repo_target_name: str
+    kind: str  # "device_type" or "custom_fields"
     file_path: str
     status: str
-    diff: Optional[DiffResult] = None
+    diff: Optional[Union[DiffResult, CustomFieldsDiffResult]] = None
     checked_at: datetime
 
 
@@ -453,18 +466,6 @@ class PushCustomFieldsRequest(BaseModel):
     instance_ids: list[str] = []
     tags: list[str] = []
     overwrite: bool = False
-
-
-class NamedListDiff(BaseModel):
-    missing_on_instance: list[str] = []
-    extra_on_instance: list[str] = []
-    changed: list[ChangedItem] = []
-
-
-class CustomFieldsDiffResult(BaseModel):
-    status: str  # in_sync / drift / error
-    custom_fields: Optional[NamedListDiff] = None
-    custom_field_choice_sets: Optional[NamedListDiff] = None
 
 
 class InstanceCustomFieldsDiffResult(BaseModel):

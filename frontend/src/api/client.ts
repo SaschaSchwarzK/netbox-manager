@@ -417,9 +417,10 @@ export interface DriftRecord {
   instance_name: string;
   repo_target_id: string;
   repo_target_name: string;
+  kind: "device_type" | "custom_fields";
   file_path: string;
   status: string;
-  diff?: DiffResult | null;
+  diff?: DiffResult | CustomFieldsDiffResult | null;
   checked_at: string;
 }
 

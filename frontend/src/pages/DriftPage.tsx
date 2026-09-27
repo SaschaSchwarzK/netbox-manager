@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
-import { driftApi, DriftRecord } from "../api/client";
-import DiffView, { summarizeDiff } from "../components/DiffView";
+import { driftApi, DriftRecord, DiffResult, CustomFieldsDiffResult } from "../api/client";
+import DiffView, { summarizeDiff, CustomFieldsDiffView, summarizeCustomFieldsDiff } from "../components/DiffView";
 
 const STATUS_COLORS: Record<string, string> = {
   in_sync: "var(--success)",
@@ -8,6 +8,18 @@ const STATUS_COLORS: Record<string, string> = {
   missing: "var(--danger)",
   error: "var(--danger)",
 };
+
+const KIND_LABELS: Record<string, string> = {
+  device_type: "Device Type",
+  custom_fields: "Custom Fields",
+};
+
+function summarize(r: DriftRecord): string {
+  if (!r.diff) return "—";
+  return r.kind === "custom_fields"
+    ? summarizeCustomFieldsDiff(r.diff as CustomFieldsDiffResult)
+    : summarizeDiff(r.diff as DiffResult);
+}
 
 export default function DriftPage() {
   const [records, setRecords] = useState<DriftRecord[]>([]);
@@ -32,8 +44,10 @@ export default function DriftPage() {
     <div>
       <h1>Drift</h1>
       <p className="page-subtitle">
-        Compares what's actually on each NetBox instance against the GitHub source of truth, for every
-        device type that's been pushed there before. Checked automatically on a schedule, or on demand below.
+        Compares what's actually on each NetBox instance against the GitHub source of truth — device types
+        (including ones created directly in NetBox, as long as their manufacturer and slug match something
+        already committed) and each repo's custom-fields template. Checked automatically on a schedule, or
+        on demand below.
       </p>
 
       <div className="toolbar">
@@ -45,20 +59,21 @@ export default function DriftPage() {
       <div className="card">
         <table>
           <thead>
-            <tr><th>Instance</th><th>Device Type</th><th>Repo</th><th>Status</th><th>Changes</th><th>Last checked</th><th></th></tr>
+            <tr><th>Instance</th><th>Kind</th><th>Device Type / Template</th><th>Repo</th><th>Status</th><th>Changes</th><th>Last checked</th><th></th></tr>
           </thead>
           <tbody>
             {records.map((r) => (
               <Fragment key={r.id}>
                 <tr>
                   <td>{r.instance_name}</td>
-                  <td className="mono">{r.file_path}</td>
+                  <td>{KIND_LABELS[r.kind] ?? r.kind}</td>
+                  <td className="mono">{r.kind === "custom_fields" ? `${r.file_path} (template)` : r.file_path}</td>
                   <td>{r.repo_target_name}</td>
                   <td>
                     <span className="status-dot" style={{ background: STATUS_COLORS[r.status] ?? "var(--muted)" }} />
                     {r.status}
                   </td>
-                  <td style={{ color: "var(--muted)", fontSize: 12.5 }}>{r.diff ? summarizeDiff(r.diff) : "—"}</td>
+                  <td style={{ color: "var(--muted)", fontSize: 12.5 }}>{summarize(r)}</td>
                   <td>{new Date(r.checked_at).toLocaleString()}</td>
                   <td>
                     {r.diff && (
@@ -70,16 +85,18 @@ export default function DriftPage() {
                 </tr>
                 {expanded === r.id && r.diff && (
                   <tr>
-                    <td colSpan={7} style={{ background: "var(--panel-raised)" }}>
-                      <DiffView diff={r.diff} />
+                    <td colSpan={8} style={{ background: "var(--panel-raised)" }}>
+                      {r.kind === "custom_fields"
+                        ? <CustomFieldsDiffView diff={r.diff as CustomFieldsDiffResult} />
+                        : <DiffView diff={r.diff as DiffResult} />}
                     </td>
                   </tr>
                 )}
               </Fragment>
             ))}
             {!loading && records.length === 0 && (
-              <tr><td colSpan={7} style={{ color: "var(--muted)" }}>
-                No drift data yet — nothing's been pushed to a NetBox instance yet, or a check hasn't run. Click "Check all now".
+              <tr><td colSpan={8} style={{ color: "var(--muted)" }}>
+                No drift data yet — nothing to check yet, or a check hasn't run. Click "Check all now".
               </td></tr>
             )}
           </tbody>

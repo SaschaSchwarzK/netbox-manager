@@ -134,7 +134,8 @@ class DriftRecord(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     instance_id: Mapped[str] = mapped_column(String(36), ForeignKey("netbox_instances.id"), nullable=False)
     repo_target_id: Mapped[str] = mapped_column(String(36), ForeignKey("github_targets.id"), nullable=False)
-    file_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), default="device_type")  # "device_type" or "custom_fields"
+    file_path: Mapped[str] = mapped_column(String(512), nullable=False)  # device-type file path, or the target's custom-fields template path
     status: Mapped[str] = mapped_column(String(32))  # in_sync / drift / missing / error
     detail_json: Mapped[str] = mapped_column(Text, default="{}")
     checked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
