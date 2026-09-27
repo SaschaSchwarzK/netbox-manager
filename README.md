@@ -60,6 +60,17 @@ launcher allows these limits to be changed with `CPU_LIMIT`, `MEMORY_LIMIT`, and
 Container behavior can be checked locally with `./scripts/container-smoke-test.sh IMAGE_NAME`.
 The same checks run in CI together with a Trivy scan for fixable high and critical vulnerabilities.
 
+### Publishing a container release
+
+Run the **Release container** workflow from the repository's **Actions** tab and enter a semantic
+version such as `v1.2.3`. The workflow builds the image, runs the container smoke tests and Trivy
+scan, and then publishes `linux/amd64` and `linux/arm64` images to
+`ghcr.io/saschaschwarzk/netbox-manager`. Leave **Also update the latest tag** selected to publish
+the same image as `latest`.
+
+The workflow uses the built-in `GITHUB_TOKEN`; no registry secret is required. The repository or
+organization must permit GitHub Actions to create and write packages.
+
 ### Container layout
 
 The root `Dockerfile` has three stages: Caddy is compiled in the free Chainguard Go development
