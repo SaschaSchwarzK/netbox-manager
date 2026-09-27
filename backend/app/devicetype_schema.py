@@ -81,6 +81,7 @@ class DeviceType(BaseModel):
     front_image: Optional[bool] = None
     rear_image: Optional[bool] = None
     comments: Optional[str] = None
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
     interfaces: list[InterfaceTemplate] = Field(default_factory=list)
     console_ports: list[ConsolePortTemplate] = Field(default_factory=list, alias="console-ports")

@@ -263,6 +263,20 @@ class CoverageEntry(BaseModel):
 
 # ---------- Bulk import from a device-type library ----------
 
+class DeviceTypePreview(BaseModel):
+    """
+    A lightweight summary of one device type's full definition, fetched on
+    demand (not during scan, which stays cheap by design) so the bulk-import
+    pickers can show what's actually inside a candidate — including its
+    custom field values — before it's imported.
+    """
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    slug: Optional[str] = None
+    component_counts: dict[str, int] = {}
+    custom_fields: dict[str, Any] = {}
+
+
 class BulkImportScanRequest(BaseModel):
     source_repo: str  # "owner/repo", e.g. netbox-community/devicetype-library
     source_branch: str = "main"
@@ -274,6 +288,13 @@ class BulkImportScanEntry(BaseModel):
     path: str
     manufacturer_guess: Optional[str] = None
     slug_guess: Optional[str] = None
+
+
+class BulkImportPreviewRequest(BaseModel):
+    source_repo: str
+    source_branch: str = "main"
+    source_pat: Optional[str] = None
+    path: str
 
 
 class BulkImportRequest(BaseModel):
@@ -316,6 +337,10 @@ class ImportFromNetboxScanEntry(BaseModel):
 class DeviceTypeKey(BaseModel):
     manufacturer: str
     slug: str
+
+
+class ImportFromNetboxPreviewRequest(DeviceTypeKey):
+    instance_id: str
 
 
 class ImportFromNetboxRequest(BaseModel):

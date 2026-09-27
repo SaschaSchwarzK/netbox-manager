@@ -12,6 +12,40 @@ const COMPONENT_LABELS: Record<string, string> = {
   "module-bays": "Module Bays",
 };
 
+// The per-key differences inside a "custom_fields" base-field change (itself a
+// dict-vs-dict comparison), broken out so the diff view can show which
+// specific custom field values differ instead of two whole-object JSON blobs.
+function customFieldRowChanges(source: any, netbox: any): { key: string; source: any; netbox: any }[] {
+  const s = source ?? {};
+  const n = netbox ?? {};
+  const keys = Array.from(new Set([...Object.keys(s), ...Object.keys(n)]));
+  return keys
+    .filter((k) => JSON.stringify(s[k] ?? null) !== JSON.stringify(n[k] ?? null))
+    .sort()
+    .map((k) => ({ key: k, source: s[k], netbox: n[k] }));
+}
+
+// A one-line summary of a diff, for a table row that hasn't been expanded yet.
+export function summarizeDiff(diff: DiffResult): string {
+  if (diff.status === "missing") return "Not on instance yet";
+  if (diff.status === "in_sync") return "In sync";
+
+  const parts: string[] = [];
+  const cfChange = diff.base_field_changes.find((c) => c.field === "custom_fields");
+  if (cfChange) {
+    const n = customFieldRowChanges(cfChange.source, cfChange.netbox).length;
+    if (n > 0) parts.push(`${n} custom field${n === 1 ? "" : "s"}`);
+  }
+  const otherBaseFields = diff.base_field_changes.filter((c) => c.field !== "custom_fields").length;
+  if (otherBaseFields > 0) parts.push(`${otherBaseFields} base field${otherBaseFields === 1 ? "" : "s"}`);
+
+  const componentChangeCount = Object.values(diff.component_changes)
+    .reduce((sum, ch) => sum + ch.added.length + ch.removed.length + ch.changed.length, 0);
+  if (componentChangeCount > 0) parts.push(`${componentChangeCount} component change${componentChangeCount === 1 ? "" : "s"}`);
+
+  return parts.length > 0 ? parts.join(", ") : "Differs";
+}
+
 export function ChangedItemsList({ items }: { items: ChangedItem[] }) {
   if (items.length === 0) return null;
   return (
@@ -48,7 +82,18 @@ export default function DiffView({ diff }: { diff: DiffResult }) {
           <table>
             <thead><tr><th>Field</th><th>GitHub</th><th>NetBox</th></tr></thead>
             <tbody>
-              {diff.base_field_changes.map((c) => (
+              {diff.base_field_changes.map((c) => c.field === "custom_fields" ? (
+                <tr key={c.field}>
+                  <td className="mono">custom_fields</td>
+                  <td colSpan={2}>
+                    {customFieldRowChanges(c.source, c.netbox).map((cf) => (
+                      <div key={cf.key} className="mono" style={{ marginBottom: 2 }}>
+                        {cf.key}: {JSON.stringify(cf.source ?? null)} → {JSON.stringify(cf.netbox ?? null)}
+                      </div>
+                    ))}
+                  </td>
+                </tr>
+              ) : (
                 <tr key={c.field}>
                   <td className="mono">{c.field}</td>
                   <td className="mono">{JSON.stringify(c.source)}</td>

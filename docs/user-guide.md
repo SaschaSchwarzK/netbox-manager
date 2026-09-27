@@ -102,9 +102,11 @@ resulting YAML.
 
 1. Fill in the manufacturer, model, slug, and other base attributes.
 2. Add interfaces, ports, bays, and other components in their corresponding tabs.
-3. Review the YAML preview.
-4. Enter or review the commit message and pull-request description.
-5. Save to create or update the pull request.
+3. Set values for any custom fields scoped to "Device type" in the **Custom Fields** tab (the
+   fields themselves are defined in the shared template — see step 8).
+4. Review the YAML preview.
+5. Enter or review the commit message and pull-request description.
+6. Save to create or update the pull request.
 
 All saves follow the pull-request workflow. Repeated saves for a file with an open pull request
 continue updating that pull request.
@@ -147,6 +149,9 @@ and push the template to selected instances.
 
 Choice sets are published before fields because fields may reference them. Existing fields are
 changed only when overwrite is selected.
+
+A custom field's **content types** determine where it can be used. Give it "Device type"
+(`dcim.devicetype`) to make it available as a value on device types in the editor — see step 6.
 
 ![Custom-fields template editor](images/user-guide/custom-fields.png)
 

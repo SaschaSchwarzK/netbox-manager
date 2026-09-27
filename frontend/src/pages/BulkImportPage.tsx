@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   githubApi, GithubTarget, instancesApi, NetboxInstance,
-  bulkImportApi, importFromNetboxApi, BulkImportResult,
+  bulkImportApi, importFromNetboxApi, BulkImportResult, DeviceTypePreview,
 } from "../api/client";
 
 type SourceType = "github" | "netbox";
@@ -12,6 +12,57 @@ interface Candidate {
   model?: string;
   slug?: string;
   path?: string; // github only
+}
+
+const COMPONENT_COUNT_LABELS: Record<string, string> = {
+  "interfaces": "interfaces",
+  "console-ports": "console ports",
+  "console-server-ports": "console server ports",
+  "power-ports": "power ports",
+  "power-outlets": "power outlets",
+  "rear-ports": "rear ports",
+  "front-ports": "front ports",
+  "device-bays": "device bays",
+  "module-bays": "module bays",
+};
+
+function DeviceTypePreviewDetail({ preview }: { preview: DeviceTypePreview | "loading" | "error" | undefined }) {
+  if (!preview || preview === "loading") return <p style={{ fontSize: 13, color: "var(--muted)" }}>Loading preview…</p>;
+  if (preview === "error") return <p style={{ fontSize: 13, color: "var(--danger)" }}>Could not load a preview for this one.</p>;
+
+  const componentEntries = Object.entries(preview.component_counts ?? {});
+  const customFieldEntries = Object.entries(preview.custom_fields ?? {});
+
+  return (
+    <div style={{ fontSize: 13 }}>
+      <p style={{ marginBottom: 6 }}>
+        <strong>{preview.manufacturer ?? "?"} {preview.model ?? "?"}</strong>{" "}
+        <span className="mono" style={{ color: "var(--muted)" }}>{preview.slug}</span>
+      </p>
+      {componentEntries.length > 0 && (
+        <p style={{ color: "var(--muted)", marginBottom: 6 }}>
+          {componentEntries.map(([key, count]) => `${count} ${COMPONENT_COUNT_LABELS[key] ?? key}`).join(", ")}
+        </p>
+      )}
+      {customFieldEntries.length > 0 ? (
+        <div>
+          <div style={{ color: "var(--muted)", marginBottom: 2 }}>Custom fields:</div>
+          <table>
+            <tbody>
+              {customFieldEntries.map(([name, value]) => (
+                <tr key={name}>
+                  <td className="mono">{name}</td>
+                  <td className="mono">{typeof value === "string" ? value : JSON.stringify(value)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p style={{ color: "var(--muted)" }}>No custom field values set.</p>
+      )}
+    </div>
+  );
 }
 
 export default function BulkImportPage() {
@@ -36,6 +87,9 @@ export default function BulkImportPage() {
   const [filter, setFilter] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
+  const [expandedPreview, setExpandedPreview] = useState<string | null>(null);
+  const [previews, setPreviews] = useState<Record<string, DeviceTypePreview | "loading" | "error">>({});
+
   const [prTitle, setPrTitle] = useState("");
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -51,6 +105,8 @@ export default function BulkImportPage() {
     setSelected(new Set());
     setResult(null);
     setImportError(null);
+    setExpandedPreview(null);
+    setPreviews({});
   };
 
   const handleScan = async () => {
@@ -88,6 +144,21 @@ export default function BulkImportPage() {
   };
   const selectAllFiltered = () => setSelected((prev) => new Set([...prev, ...filtered.map((c) => c.key)]));
   const clearSelection = () => setSelected(new Set());
+
+  const handlePreview = async (c: Candidate) => {
+    if (expandedPreview === c.key) { setExpandedPreview(null); return; }
+    setExpandedPreview(c.key);
+    if (previews[c.key] && previews[c.key] !== "error") return; // already fetched (or in flight)
+    setPreviews((prev) => ({ ...prev, [c.key]: "loading" }));
+    try {
+      const preview = sourceType === "github"
+        ? await bulkImportApi.preview(selectedTarget, sourceRepo, sourceBranch, c.path!, sourcePat || undefined)
+        : await importFromNetboxApi.preview(selectedTarget, sourceInstance, c.manufacturer!, c.slug!);
+      setPreviews((prev) => ({ ...prev, [c.key]: preview }));
+    } catch {
+      setPreviews((prev) => ({ ...prev, [c.key]: "error" }));
+    }
+  };
 
   const handleImport = async () => {
     setImporting(true);
@@ -205,17 +276,31 @@ export default function BulkImportPage() {
               <thead>
                 <tr>
                   <th></th><th>Manufacturer</th><th>{sourceType === "github" ? "Slug (guessed)" : "Model"}</th>
-                  <th>{sourceType === "github" ? "Path" : "Slug"}</th>
+                  <th>{sourceType === "github" ? "Path" : "Slug"}</th><th></th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((c) => (
-                  <tr key={c.key}>
-                    <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(c.key)} onChange={() => toggle(c.key)} /></td>
-                    <td>{c.manufacturer ?? "—"}</td>
-                    <td className="mono">{(sourceType === "github" ? c.slug : c.model) ?? "—"}</td>
-                    <td className="mono" style={{ color: "var(--muted)" }}>{(sourceType === "github" ? c.path : c.slug) ?? "—"}</td>
-                  </tr>
+                  <Fragment key={c.key}>
+                    <tr>
+                      <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(c.key)} onChange={() => toggle(c.key)} /></td>
+                      <td>{c.manufacturer ?? "—"}</td>
+                      <td className="mono">{(sourceType === "github" ? c.slug : c.model) ?? "—"}</td>
+                      <td className="mono" style={{ color: "var(--muted)" }}>{(sourceType === "github" ? c.path : c.slug) ?? "—"}</td>
+                      <td>
+                        <button onClick={() => handlePreview(c)} style={{ padding: "2px 8px" }}>
+                          {expandedPreview === c.key ? "Hide" : "Preview"}
+                        </button>
+                      </td>
+                    </tr>
+                    {expandedPreview === c.key && (
+                      <tr>
+                        <td colSpan={5} style={{ background: "var(--panel-raised)" }}>
+                          <DeviceTypePreviewDetail preview={previews[c.key]} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

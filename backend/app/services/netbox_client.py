@@ -268,6 +268,7 @@ def get_existing_device_type(base_url: str, token: str, verify_ssl: bool, manufa
         "weight": float(dt.weight) if dt.weight is not None else None,
         "weight_unit": _choice_value(getattr(dt, "weight_unit", None)),
         "comments": dt.comments or None,
+        "custom_fields": dict(getattr(dt, "custom_fields", None) or {}),
     }
 
     for key, endpoint_name in COMPONENT_ENDPOINTS.items():

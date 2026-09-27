@@ -285,6 +285,14 @@ export interface BulkImportScanEntry {
   slug_guess?: string | null;
 }
 
+export interface DeviceTypePreview {
+  manufacturer?: string | null;
+  model?: string | null;
+  slug?: string | null;
+  component_counts: Record<string, number>;
+  custom_fields: Record<string, any>;
+}
+
 export interface BulkImportFailure {
   path: string;
   error: string;
@@ -324,6 +332,11 @@ export const bulkImportApi = {
       method: "POST", body: JSON.stringify({ source_repo, source_branch, source_base_dir, source_pat }),
     }),
 
+  preview: (targetId: string, source_repo: string, source_branch: string, path: string, source_pat?: string) =>
+    request<DeviceTypePreview>(`/repos/${targetId}/device-types/bulk-import/preview`, {
+      method: "POST", body: JSON.stringify({ source_repo, source_branch, source_pat, path }),
+    }),
+
   import: (targetId: string, data: {
     source_repo: string; source_branch: string; source_pat?: string; paths: string[];
     commit_message?: string; pr_title?: string; pr_body?: string;
@@ -345,6 +358,11 @@ export const importFromNetboxApi = {
   scan: (targetId: string, instance_id: string) =>
     request<ImportFromNetboxScanEntry[]>(`/repos/${targetId}/device-types/import-from-netbox/scan`, {
       method: "POST", body: JSON.stringify({ instance_id }),
+    }),
+
+  preview: (targetId: string, instance_id: string, manufacturer: string, slug: string) =>
+    request<DeviceTypePreview>(`/repos/${targetId}/device-types/import-from-netbox/preview`, {
+      method: "POST", body: JSON.stringify({ instance_id, manufacturer, slug }),
     }),
 
   import: (targetId: string, data: {
