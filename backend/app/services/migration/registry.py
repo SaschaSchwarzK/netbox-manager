@@ -35,6 +35,23 @@ class MatchStrategy:
 
 
 @dataclass(frozen=True)
+class PolymorphicFieldSpec:
+    """
+    A single JSON field whose dependency type varies per object, determined
+    at runtime by reading a sibling discriminator field on the same source
+    object. Used for NetBox GenericForeignKey fields like `assigned_object`
+    on ipam.ipaddress, where `assigned_object_type` (e.g. "dcim.interface"
+    or "virtualization.vminterface") names the actual type.
+
+    Always treated as deferred (patch-only), same as deferred_field_map:
+    there is no ordering guarantee that the referenced type is resolved
+    before this type, so it can never be resolved inline.
+    """
+    discriminator_field: str          # sibling field that names the type, e.g. "assigned_object_type"
+    type_values: dict[str, str]       # {discriminator_value: dependency_type_key}
+
+
+@dataclass(frozen=True)
 class TypeSpec:
     key: str
     endpoint: str
@@ -52,6 +69,10 @@ class TypeSpec:
     # they always go through build_payload's "defer" path and end up as a
     # MigrationJobPatch, applied once every phase-`primary` item is done.
     deferred_field_map: dict[str, str]
+    # GenericForeignKey fields whose dependency type varies per object,
+    # determined by a sibling discriminator field. Always deferred (patch-
+    # only), same as deferred_field_map. Stored as {field_name: PolymorphicFieldSpec}.
+    polymorphic_field_map: dict[str, PolymorphicFieldSpec]
     tenant_relation: str | None
     tenant_filterable: bool
     match_strategies: tuple[MatchStrategy, ...]
@@ -75,7 +96,7 @@ class TypeSpec:
 
     @property
     def all_field_map(self) -> dict[str, str]:
-        """field_map + deferred_field_map merged — every FK field this type has, for matching/sanitization."""
+        """field_map + deferred_field_map merged — every static-type FK field this type has."""
         return {**self.field_map, **self.deferred_field_map}
 
 
@@ -102,7 +123,7 @@ class Registry:
         raise MigrationRegistryError(f"{type_key} has no field_map entry for dependency {dependency_key!r}")
 
     def all_field_map_for(self, type_key: str) -> dict[str, str]:
-        """field_map + deferred_field_map merged — every FK field this type has, for matching/sanitization."""
+        """field_map + deferred_field_map merged — every static-type FK field this type has."""
         spec = self.types[type_key]
         return {**spec.field_map, **spec.deferred_field_map}
 
@@ -173,7 +194,11 @@ def _parse_type(key: str, raw: Any) -> TypeSpec:
         raise MigrationRegistryError(f"{key}.field_map must be a mapping of field-name -> type-key strings")
     all_deps = set(dependencies) | set(optional_dependencies)
     field_map_dep_values = set(field_map.values())
-    missing_map_entries = all_deps - field_map_dep_values
+    # A dependency type may be covered by polymorphic_field_map instead of field_map;
+    # parse polymorphic_field_map first so we can exclude those types from the field_map check.
+    polymorphic_field_map = _parse_polymorphic_field_map(key, raw.get("polymorphic_field_map", {}), all_deps)
+    poly_covered_types = {dep for spec in polymorphic_field_map.values() for dep in spec.type_values.values()}
+    missing_map_entries = all_deps - field_map_dep_values - poly_covered_types
     if missing_map_entries:
         raise MigrationRegistryError(f"{key}.field_map has no field for dependencies: {sorted(missing_map_entries)}")
     extra_map_entries = field_map_dep_values - all_deps
@@ -188,6 +213,10 @@ def _parse_type(key: str, raw: Any) -> TypeSpec:
     overlapping_fields = set(field_map) & set(deferred_field_map)
     if overlapping_fields:
         raise MigrationRegistryError(f"{key}: fields {sorted(overlapping_fields)} in both field_map and deferred_field_map")
+
+    poly_overlap = (set(field_map) | set(deferred_field_map)) & set(polymorphic_field_map)
+    if poly_overlap:
+        raise MigrationRegistryError(f"{key}: fields {sorted(poly_overlap)} appear in both polymorphic_field_map and field_map/deferred_field_map")
 
     match_strategies = _parse_match_strategies(key, raw.get("match_strategies"))
     all_fk_field_names = set(field_map) | set(deferred_field_map)
@@ -208,6 +237,7 @@ def _parse_type(key: str, raw: Any) -> TypeSpec:
         optional_dependencies=tuple(optional_dependencies),
         field_map=field_map,
         deferred_field_map=deferred_field_map,
+        polymorphic_field_map=polymorphic_field_map,
         tenant_relation=tenant_relation,
         tenant_filterable=bool(raw.get("tenant_filterable", False)),
         match_strategies=match_strategies,
@@ -215,6 +245,46 @@ def _parse_type(key: str, raw: Any) -> TypeSpec:
         out_of_scope_reason=raw.get("out_of_scope_reason"),
         self_parent_field=raw.get("self_parent_field"),
     )
+
+
+def _parse_polymorphic_field_map(
+    key: str,
+    raw: Any,
+    all_deps: set[str],
+) -> dict[str, PolymorphicFieldSpec]:
+    """
+    Parses and validates the `polymorphic_field_map` block. Each entry:
+      field_name:
+        discriminator_field: <sibling field that names the type>
+        type_values: {discriminator_value: dependency_type_key}
+    Every dependency_type_key in type_values must appear in the type's
+    dependencies or optional_dependencies (same rule as field_map).
+    """
+    if not raw:
+        return {}
+    if not isinstance(raw, dict):
+        raise MigrationRegistryError(f"{key}.polymorphic_field_map must be a mapping")
+    result: dict[str, PolymorphicFieldSpec] = {}
+    for field_name, spec_raw in raw.items():
+        where = f"{key}.polymorphic_field_map.{field_name}"
+        if not isinstance(spec_raw, dict):
+            raise MigrationRegistryError(f"{where} must be a mapping")
+        disc = spec_raw.get("discriminator_field")
+        if not isinstance(disc, str) or not disc:
+            raise MigrationRegistryError(f"{where}.discriminator_field must be a non-empty string")
+        type_values = spec_raw.get("type_values")
+        if not isinstance(type_values, dict) or not type_values:
+            raise MigrationRegistryError(f"{where}.type_values must be a non-empty mapping")
+        if not all(isinstance(k, str) and isinstance(v, str) for k, v in type_values.items()):
+            raise MigrationRegistryError(f"{where}.type_values must map strings to strings")
+        # Every referenced dependency type must be declared in dependencies/optional_dependencies.
+        unknown_types = set(type_values.values()) - all_deps
+        if unknown_types:
+            raise MigrationRegistryError(
+                f"{where}.type_values references types not in dependencies/optional_dependencies: {sorted(unknown_types)}"
+            )
+        result[field_name] = PolymorphicFieldSpec(discriminator_field=disc, type_values=dict(type_values))
+    return result
 
 
 def _topological_sort(types: dict[str, TypeSpec]) -> tuple[str, ...]:
@@ -259,6 +329,12 @@ def parse_registry(doc: dict[str, Any]) -> Registry:
         for dep in spec.deferred_field_map.values():
             if dep not in types:
                 raise MigrationRegistryError(f"{key}.deferred_field_map references unknown type {dep!r}")
+        for field_name, poly_spec in spec.polymorphic_field_map.items():
+            for dep in poly_spec.type_values.values():
+                if dep not in types:
+                    raise MigrationRegistryError(
+                        f"{key}.polymorphic_field_map.{field_name} references unknown type {dep!r}"
+                    )
     topo = _topological_sort(types)
     return Registry(types=types, topological_order=topo)
 

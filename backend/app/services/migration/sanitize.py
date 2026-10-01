@@ -68,6 +68,10 @@ class ExtractedFields:
     static_fields: dict[str, Any]         # plain, non-FK fields — final as-is, never re-resolved
     fk_refs: dict[str, int]               # {field_name: source_fk_id}, from field_map (regular dependencies)
     deferred_fk_refs: dict[str, int]      # {field_name: source_fk_id}, from deferred_field_map (patch-only)
+    # Polymorphic FK fields: {field_name: {"type": dep_type_key, "id": source_fk_id}}.
+    # The type is determined at extract time from the discriminator field on the source object.
+    # Always patch-only (same as deferred_fk_refs) — no ordering guarantee.
+    polymorphic_fk_refs: dict[str, dict[str, Any]]
     dropped_custom_fields: list[str]
 
 
@@ -81,6 +85,7 @@ def extract_fields(type_spec: TypeSpec, source_obj: dict[str, Any]) -> Extracted
     static_fields: dict[str, Any] = {}
     fk_refs: dict[str, int] = {}
     deferred_fk_refs: dict[str, int] = {}
+    polymorphic_fk_refs: dict[str, dict[str, Any]] = {}
     dropped_custom_fields: list[str] = []
 
     for key, value in source_obj.items():
@@ -94,6 +99,14 @@ def extract_fields(type_spec: TypeSpec, source_obj: dict[str, Any]) -> Extracted
             if value is not None:
                 deferred_fk_refs[key] = value["id"] if isinstance(value, dict) else value
             continue
+        if key in type_spec.polymorphic_field_map:
+            if value is not None:
+                poly_spec = type_spec.polymorphic_field_map[key]
+                disc_value = source_obj.get(poly_spec.discriminator_field)
+                dep_type_key = poly_spec.type_values.get(disc_value) if disc_value else None
+                source_fk_id = value["id"] if isinstance(value, dict) else value
+                polymorphic_fk_refs[key] = {"type": dep_type_key, "id": source_fk_id}
+            continue
         if key in type_spec.field_map:
             if value is None:
                 static_fields[key] = None  # a genuinely absent optional FK — not a resolution problem
@@ -102,7 +115,7 @@ def extract_fields(type_spec: TypeSpec, source_obj: dict[str, Any]) -> Extracted
             continue
         static_fields[key] = _choice_value(value)
 
-    return ExtractedFields(static_fields, fk_refs, deferred_fk_refs, dropped_custom_fields)
+    return ExtractedFields(static_fields, fk_refs, deferred_fk_refs, polymorphic_fk_refs, dropped_custom_fields)
 
 
 def resolve_fk_refs(
@@ -131,6 +144,42 @@ def resolve_fk_refs(
         else:
             unresolved[field_name] = source_fk_id
     return resolved, unresolved
+
+
+def resolve_polymorphic_fk_refs(
+    polymorphic_fk_refs: dict[str, dict[str, Any]],
+    *,
+    id_map: IdMap,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """
+    Resolves polymorphic FK refs (from ExtractedFields.polymorphic_fk_refs) against
+    `id_map`. Each entry is {field_name: {"type": dep_type_key, "id": source_fk_id}}.
+
+    Returns (resolved, errors) where:
+    - resolved: {field_name: target_fk_id} for entries that resolved successfully.
+    - errors: {field_name: reason_string} for entries that could not be resolved
+      (unknown discriminator value, dependency type not in id_map, etc.).
+    """
+    resolved: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+    for field_name, ref in polymorphic_fk_refs.items():
+        dep_type_key = ref.get("type")
+        source_fk_id = ref.get("id")
+        if dep_type_key is None:
+            errors[field_name] = (
+                f"assigned_object_type discriminator value is unknown or not mapped — "
+                f"cannot determine which dependency type to resolve against"
+            )
+            continue
+        target_fk_id = id_map.get(dep_type_key, source_fk_id)
+        if target_fk_id is None:
+            errors[field_name] = (
+                f"dependency type {dep_type_key!r} (source id {source_fk_id}) was not resolved — "
+                f"it may not have been selected for this migration, or was skipped/ambiguous"
+            )
+        else:
+            resolved[field_name] = target_fk_id
+    return resolved, errors
 
 
 def build_preview_payload(

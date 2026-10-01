@@ -247,6 +247,9 @@ class MigrationJobPatch(Base):
     source_id: Mapped[int] = mapped_column(Integer, nullable=False)  # source object whose target counterpart gets patched
 
     patch_fields_json: Mapped[str] = mapped_column(Text, default="{}")  # {field_name: source_fk_id}, resolved through the id map at execution time
+    # Polymorphic FK fields: {field_name: {"type": dep_type_key, "id": source_fk_id}}.
+    # The type is determined at plan time from the discriminator field; resolution happens at patch time.
+    polymorphic_patch_fields_json: Mapped[str] = mapped_column(Text, default="{}")
 
     execution_status: Mapped[str] = mapped_column(String(16), default="pending")
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)

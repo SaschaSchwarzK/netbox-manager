@@ -46,6 +46,14 @@
 #     These are never resolved inline during phase `primary` — they always
 #     go through build_payload's "defer" path and become a MigrationJobPatch,
 #     applied once every phase-`primary` item has reached a terminal state.
+#   polymorphic_field_map: for GenericForeignKey fields whose dependency type
+#     varies per object (e.g. ipam.ipaddress.assigned_object, which can point
+#     at either dcim.interface or virtualization.vminterface depending on the
+#     value of the sibling `assigned_object_type` field). Shape:
+#       {field_name: {discriminator_field: <sibling field>, type_values: {<discriminator_value>: <dep_type_key>}}}
+#     Every dep_type_key in type_values must appear in dependencies or
+#     optional_dependencies. Always deferred (patch-only) — same as
+#     deferred_field_map, no ordering guarantee.
 #   tenant_relation: same semantics and values as tenant-relations.yaml:
 #     a Django-style path to the Tenant model ("tenant", "device__tenant", ...),
 #     or null when there is no path (global catalog objects, or objects whose
@@ -697,21 +705,21 @@ types:
     ui_path: "ipam/ip-addresses"
     selectable: true
     dependencies: []
-    optional_dependencies: [ipam.vrf, tenancy.tenant, dcim.interface]
+    optional_dependencies: [ipam.vrf, tenancy.tenant, dcim.interface, virtualization.vminterface]
     field_map:
       vrf: ipam.vrf
       tenant: tenancy.tenant
-      assigned_object: dcim.interface
-    # KNOWN LIMITATION (v1): `assigned_object` is actually a GenericForeignKey
-    # — its real type varies per row with `assigned_object_type`, and can be
-    # virtualization.vminterface instead of dcim.interface. This registry's
-    # field_map can only express one static type per field, so only the
-    # device-interface case is modeled. An IP address assigned to a VM
-    # interface is still migrated, but its `assigned_object` link is left
-    # unresolved (reported as a patch error, not silently dropped) rather
-    # than wrongly resolved against the interface id map. Proper support
-    # needs polymorphic (assigned_object_type-aware) resolution — planned
-    # for a later phase, not v1.
+    # `assigned_object` is a GenericForeignKey: its actual type is given by the sibling
+    # `assigned_object_type` field (e.g. "dcim.interface" or "virtualization.vminterface").
+    # Handled via polymorphic_field_map so each IP address is resolved against whichever
+    # dependency type its own assigned_object_type names. Always deferred (patch-only) —
+    # no ordering guarantee relative to interfaces or VM interfaces.
+    polymorphic_field_map:
+      assigned_object:
+        discriminator_field: assigned_object_type
+        type_values:
+          "dcim.interface": dcim.interface
+          "virtualization.vminterface": virtualization.vminterface
     tenant_relation: "tenant"
     tenant_filterable: true
     match_strategies:

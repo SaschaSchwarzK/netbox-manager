@@ -35,7 +35,7 @@ from app.services.migration.client import MigrationApiError, RateLimitedClient
 from app.services.migration.matcher import IdMap
 from app.services.migration.planner import LiveTargetLookup, resolve_endpoint
 from app.services.migration.registry import Registry, TypeSpec
-from app.services.migration.sanitize import resolve_fk_refs
+from app.services.migration.sanitize import resolve_fk_refs, resolve_polymorphic_fk_refs
 from app.services.syslog_client import send_audit_entry
 
 HEARTBEAT_EVERY = 10  # items/patches between last_heartbeat_at updates — cheap enough to not throttle a large run
@@ -218,13 +218,24 @@ def _execute_pending_patches(
 
         type_spec = registry[patch.object_type]
         patch_fields = json.loads(patch.patch_fields_json)
+        polymorphic_patch_fields = json.loads(patch.polymorphic_patch_fields_json or "{}")
+
         resolved, unresolved = resolve_fk_refs(type_spec, patch_fields, id_map=id_map)
-        if unresolved:
+        poly_resolved, poly_errors = resolve_polymorphic_fk_refs(polymorphic_patch_fields, id_map=id_map)
+
+        all_errors = {**{k: f"unresolved: {v}" for k, v in unresolved.items()}, **poly_errors}
+        if all_errors:
             patch.execution_status = "error"
-            patch.error_detail = f"Dependency never resolved (skipped or ambiguous?): {sorted(unresolved)}"
+            patch.error_detail = (
+                f"Dependency never resolved (skipped or ambiguous?): {sorted(unresolved)}"
+                if unresolved else
+                f"Polymorphic FK could not be resolved: { {k: v for k, v in poly_errors.items()} }"
+            )
             patch.executed_at = datetime.utcnow()
             db.commit()
             continue
+
+        merged = {**resolved, **poly_resolved}
 
         target_id = id_map.get(patch.object_type, patch.source_id)
         if target_id is None or target_id < 0:
@@ -238,7 +249,7 @@ def _execute_pending_patches(
 
         try:
             endpoint = resolve_endpoint(target_client.nb, type_spec.endpoint)
-            target_client.update_by_id(endpoint, target_id, resolved)
+            target_client.update_by_id(endpoint, target_id, merged)
             patch.execution_status = "done"
         except MigrationApiError as exc:
             patch.execution_status = "error"

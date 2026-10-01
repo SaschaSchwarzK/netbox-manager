@@ -87,7 +87,7 @@ def test_deferred_fk_is_applied_via_patch_phase(db):
             "primary_ip4": {"id": 55},
         }],
         "dcim.interfaces": [{"id": 10, "device": {"id": 1}, "name": "mgmt0"}],
-        "ipam.ip_addresses": [{"id": 55, "address": "10.0.0.1/24", "assigned_object": {"id": 10}}],
+        "ipam.ip_addresses": [{"id": 55, "address": "10.0.0.1/24", "assigned_object_type": "dcim.interface", "assigned_object": {"id": 10}}],
     }, read_only=True)
     target = FakeClient({})
 
@@ -249,3 +249,101 @@ def test_cancellation_stops_between_items_and_leaves_job_cancelled(db):
     db.refresh(job)
     assert job.status == "cancelled"
     assert len(target.data.get("dcim.sites", [])) == 0  # stopped before creating anything
+
+
+# ── Fix 1: polymorphic assigned_object end-to-end ────────────────────────────
+
+def test_ip_assigned_to_device_interface_resolves_via_patch_phase(db):
+    source = FakeClient({
+        "dcim.manufacturers": [{"id": 1, "slug": "cisco"}],
+        "dcim.device_types": [{"id": 1, "manufacturer": {"id": 1}, "model": "C9300"}],
+        "dcim.device_roles": [{"id": 1, "slug": "access-switch"}],
+        "dcim.sites": [{"id": 1, "slug": "ams-1"}],
+        "dcim.devices": [{"id": 1, "name": "sw-1", "site": {"id": 1}, "device_type": {"id": 1}, "role": {"id": 1}}],
+        "dcim.interfaces": [{"id": 10, "device": {"id": 1}, "name": "mgmt0"}],
+        "ipam.ip_addresses": [{
+            "id": 55, "address": "10.0.0.1/24",
+            "assigned_object_type": "dcim.interface",
+            "assigned_object": {"id": 10},
+        }],
+    }, read_only=True)
+    target = FakeClient({})
+
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"dcim.device", "dcim.interface", "ipam.ipaddress"},
+        tenant_filter=[], mapping_overrides={},
+    )
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+
+    db.refresh(job)
+    assert job.status == "completed"
+    iface = target.data["dcim.interfaces"][0]
+    ip = target.data["ipam.ip_addresses"][0]
+    # The IP's assigned_object must point at the newly-created target interface
+    assert ip["assigned_object"] == iface["id"]
+
+
+def test_ip_assigned_to_vm_interface_resolves_via_patch_phase(db):
+    source = FakeClient({
+        "virtualization.cluster_types": [{"id": 1, "slug": "vmware"}],
+        "virtualization.clusters": [{"id": 1, "name": "prod", "type": {"id": 1}}],
+        "virtualization.virtual_machines": [{"id": 1, "name": "vm-1", "cluster": {"id": 1}}],
+        "virtualization.interfaces": [{"id": 20, "virtual_machine": {"id": 1}, "name": "eth0"}],
+        "ipam.ip_addresses": [{
+            "id": 66, "address": "192.168.1.1/24",
+            "assigned_object_type": "virtualization.vminterface",
+            "assigned_object": {"id": 20},
+        }],
+    }, read_only=True)
+    target = FakeClient({})
+
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"virtualization.virtualmachine", "virtualization.vminterface", "ipam.ipaddress"},
+        tenant_filter=[], mapping_overrides={},
+    )
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+
+    db.refresh(job)
+    assert job.status == "completed"
+    vmif = target.data["virtualization.interfaces"][0]
+    ip = target.data["ipam.ip_addresses"][0]
+    assert ip["assigned_object"] == vmif["id"]
+
+
+def test_ip_assigned_to_vminterface_not_selected_produces_patch_error(db):
+    # vminterface is NOT in selected_types — its id map will be empty.
+    # The patch must fail with a clear, specific error, not silently succeed or
+    # be confused with the dcim.interface case.
+    source = FakeClient({
+        "ipam.ip_addresses": [{
+            "id": 66, "address": "192.168.1.1/24",
+            "assigned_object_type": "virtualization.vminterface",
+            "assigned_object": {"id": 20},
+        }],
+    }, read_only=True)
+    target = FakeClient({})
+
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"ipam.ipaddress"},  # vminterface deliberately excluded
+        tenant_filter=[], mapping_overrides={},
+    )
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+
+    db.refresh(job)
+    assert job.status == "completed_with_errors"
+
+    from app import models as _models
+    patches = db.query(_models.MigrationJobPatch).filter_by(job_id=job.id).all()
+    ip_patch = next(p for p in patches if p.object_type == "ipam.ipaddress")
+    assert ip_patch.execution_status == "error"
+    # Error must mention the vminterface type specifically
+    assert "virtualization.vminterface" in ip_patch.error_detail

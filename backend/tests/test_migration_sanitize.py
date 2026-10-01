@@ -118,3 +118,85 @@ def test_build_preview_payload_omits_still_unresolved_fk():
     extracted = extract_fields(REGISTRY["dcim.device"], source_obj)
     payload = build_preview_payload(REGISTRY["dcim.device"], extracted, id_map=IdMap())
     assert payload == {"name": "core-sw-1"}
+
+
+# ── Fix 1: polymorphic assigned_object ──────────────────────────────────────
+
+def test_extract_fields_polymorphic_device_interface_routes_to_dcim_interface():
+    source_obj = {
+        "address": "10.0.0.1/24",
+        "assigned_object_type": "dcim.interface",
+        "assigned_object": {"id": 10},
+    }
+    extracted = extract_fields(REGISTRY["ipam.ipaddress"], source_obj)
+    assert extracted.polymorphic_fk_refs == {"assigned_object": {"type": "dcim.interface", "id": 10}}
+    assert "assigned_object" not in extracted.fk_refs
+    assert "assigned_object" not in extracted.static_fields
+
+
+def test_extract_fields_polymorphic_vm_interface_routes_to_vminterface():
+    source_obj = {
+        "address": "10.0.0.2/24",
+        "assigned_object_type": "virtualization.vminterface",
+        "assigned_object": {"id": 20},
+    }
+    extracted = extract_fields(REGISTRY["ipam.ipaddress"], source_obj)
+    assert extracted.polymorphic_fk_refs == {"assigned_object": {"type": "virtualization.vminterface", "id": 20}}
+    assert "assigned_object" not in extracted.fk_refs
+
+
+def test_extract_fields_polymorphic_unknown_discriminator_stores_none_type():
+    # An unknown assigned_object_type value (not in type_values) stores type=None,
+    # which resolve_polymorphic_fk_refs will turn into a clear error at patch time.
+    source_obj = {
+        "address": "10.0.0.3/24",
+        "assigned_object_type": "circuits.circuittermination",
+        "assigned_object": {"id": 30},
+    }
+    extracted = extract_fields(REGISTRY["ipam.ipaddress"], source_obj)
+    assert extracted.polymorphic_fk_refs["assigned_object"]["type"] is None
+    assert extracted.polymorphic_fk_refs["assigned_object"]["id"] == 30
+
+
+def test_resolve_polymorphic_fk_refs_resolves_dcim_interface():
+    from app.services.migration.sanitize import resolve_polymorphic_fk_refs
+    id_map = IdMap()
+    id_map.put("dcim.interface", 10, 1010)
+    poly_refs = {"assigned_object": {"type": "dcim.interface", "id": 10}}
+    resolved, errors = resolve_polymorphic_fk_refs(poly_refs, id_map=id_map)
+    assert resolved == {"assigned_object": 1010}
+    assert errors == {}
+
+
+def test_resolve_polymorphic_fk_refs_resolves_vminterface():
+    from app.services.migration.sanitize import resolve_polymorphic_fk_refs
+    id_map = IdMap()
+    id_map.put("virtualization.vminterface", 20, 2020)
+    poly_refs = {"assigned_object": {"type": "virtualization.vminterface", "id": 20}}
+    resolved, errors = resolve_polymorphic_fk_refs(poly_refs, id_map=id_map)
+    assert resolved == {"assigned_object": 2020}
+    assert errors == {}
+
+
+def test_resolve_polymorphic_fk_refs_error_when_type_not_in_id_map():
+    from app.services.migration.sanitize import resolve_polymorphic_fk_refs
+    id_map = IdMap()  # vminterface never migrated
+    poly_refs = {"assigned_object": {"type": "virtualization.vminterface", "id": 20}}
+    resolved, errors = resolve_polymorphic_fk_refs(poly_refs, id_map=id_map)
+    assert resolved == {}
+    assert "assigned_object" in errors
+    assert "virtualization.vminterface" in errors["assigned_object"]
+
+
+def test_resolve_polymorphic_fk_refs_error_when_type_is_none():
+    from app.services.migration.sanitize import resolve_polymorphic_fk_refs
+    id_map = IdMap()
+    poly_refs = {"assigned_object": {"type": None, "id": 30}}
+    resolved, errors = resolve_polymorphic_fk_refs(poly_refs, id_map=id_map)
+    assert resolved == {}
+    assert "assigned_object" in errors
+
+
+# ── Fix 2: update_empty_only ─────────────────────────────────────────────────
+# (Sanitize-level: extract_fields itself is unchanged for this fix; the
+#  filtering happens in the planner. These tests live in test_migration_planner.py.)

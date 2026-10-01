@@ -41,7 +41,7 @@ from app.services.migration.matcher import (
     match_object,
 )
 from app.services.migration.registry import Registry, TypeSpec, resolve_selection
-from app.services.migration.sanitize import build_preview_payload, extract_fields, resolve_fk_refs
+from app.services.migration.sanitize import build_preview_payload, extract_fields, resolve_fk_refs, ExtractedFields
 
 DEFAULT_CONFLICT_POLICY = "skip"  # skip / update / update_empty_only — see ConflictPolicy
 
@@ -56,6 +56,10 @@ class PlannedItem:
     static_fields: dict[str, Any]
     fk_refs: dict[str, int]           # {field_name: source_fk_id}, regular dependencies — always resolvable by execution time
     deferred_fk: dict[str, int]       # {field_name: source_fk_id}, always via phase `patch`
+    # Polymorphic FK refs: {field_name: {"type": dep_type_key, "id": source_fk_id}}.
+    # Always patch-only. Stored verbatim from extract_fields so the executor can
+    # call resolve_polymorphic_fk_refs with the real id_map at patch time.
+    polymorphic_fk: dict[str, dict[str, Any]]
     preview_payload: dict[str, Any]   # best-effort payload for the report; NEVER sent to any API
     dropped_custom_fields: list[str]
     target_id: int | None            # a REAL target id (existing object); None for "create" (even though a placeholder exists in id_map during planning)
@@ -68,6 +72,7 @@ class PlannedPatch:
     object_type: str
     source_id: int
     patch_fields: dict[str, int]  # {field_name: source_fk_id}, resolved later at execution time
+    polymorphic_patch_fields: dict[str, dict[str, Any]]  # {field_name: {"type": dep_type_key, "id": source_fk_id}}
 
 
 @dataclass
@@ -199,9 +204,11 @@ def build_plan(
                 id_map.put(type_key, item.source_id, placeholders.next())
             # "skip" / "ambiguous": deliberately no id_map entry — nothing exists to reference.
 
-            if item.deferred_fk:
+            if item.deferred_fk or item.polymorphic_fk:
                 result.patches.append(PlannedPatch(
-                    object_type=type_key, source_id=item.source_id, patch_fields=dict(item.deferred_fk),
+                    object_type=type_key, source_id=item.source_id,
+                    patch_fields=dict(item.deferred_fk),
+                    polymorphic_patch_fields=dict(item.polymorphic_fk),
                 ))
         result.totals[type_key] = type_totals
 
@@ -231,26 +238,60 @@ def _plan_one_object(
         # "Mapped objects are never changed" — this holds regardless of conflict_policy for an
         # EXPLICIT mapping override (the user pointed at this object on purpose). For an
         # auto-match (natural key), conflict_policy decides whether it's left alone ("map") or
-        # updated from the source ("update"/"update_empty_only" — the latter still marked
-        # "update" here; restricting to empty fields only is the executor's job, since it needs
-        # the target object's current field values, which planning already fetched via the match).
+        # updated from the source ("update": all fields; "update_empty_only": only fields that
+        # are currently empty on the target, where empty means None/""/[]/{}; 0 and False are
+        # meaningful values and are never overwritten).
         is_explicit = match.outcome == MatchOutcome.MAPPED_EXPLICIT
         if is_explicit or conflict_policy == "skip":
             return PlannedItem(
                 object_type=type_spec.key, source_id=source_id, source_natural_key=natural_key,
                 planned_action="map", match_detail=match.detail,
-                static_fields={}, fk_refs={}, deferred_fk={}, preview_payload={},
+                static_fields={}, fk_refs={}, deferred_fk={}, polymorphic_fk={}, preview_payload={},
                 dropped_custom_fields=[], target_id=match.target_id, execution_status="done",
             )
         extracted = extract_fields(type_spec, source_obj)
-        preview_payload = build_preview_payload(type_spec, extracted, id_map=id_map)
         if extracted.dropped_custom_fields:
             warnings.append(f"{type_spec.key} id={source_id} ({natural_key}): dropped custom fields {extracted.dropped_custom_fields}")
+
+        if conflict_policy == "update_empty_only":
+            # Filter to only fields that are currently empty on the matched target object.
+            # The target object is already in the LiveTargetLookup cache from the match;
+            # re-fetch it by id to get the full field set (the match may have returned a
+            # partial projection depending on the strategy used).
+            target_obj = target_lookup.find(type_spec, {"id": match.target_id}) or {}
+            _EMPTY = (None, "", [], {})
+            filtered_static = {k: v for k, v in extracted.static_fields.items() if target_obj.get(k) in _EMPTY}
+            filtered_fk_refs = {k: v for k, v in extracted.fk_refs.items() if target_obj.get(k) in _EMPTY}
+            if not filtered_static and not filtered_fk_refs:
+                # Nothing to update — treat as a plain map (no-op).
+                return PlannedItem(
+                    object_type=type_spec.key, source_id=source_id, source_natural_key=natural_key,
+                    planned_action="map", match_detail=match.detail,
+                    static_fields={}, fk_refs={}, deferred_fk={}, polymorphic_fk={}, preview_payload={},
+                    dropped_custom_fields=extracted.dropped_custom_fields,
+                    target_id=match.target_id, execution_status="done",
+                )
+            preview_payload = build_preview_payload(
+                type_spec,
+                ExtractedFields(filtered_static, filtered_fk_refs, {}, {}, extracted.dropped_custom_fields),
+                id_map=id_map,
+            )
+            return PlannedItem(
+                object_type=type_spec.key, source_id=source_id, source_natural_key=natural_key,
+                planned_action="update", match_detail=match.detail,
+                static_fields=filtered_static, fk_refs=filtered_fk_refs,
+                deferred_fk={}, polymorphic_fk={}, preview_payload=preview_payload,
+                dropped_custom_fields=extracted.dropped_custom_fields,
+                target_id=match.target_id, execution_status="pending",
+            )
+
+        preview_payload = build_preview_payload(type_spec, extracted, id_map=id_map)
         return PlannedItem(
             object_type=type_spec.key, source_id=source_id, source_natural_key=natural_key,
             planned_action="update", match_detail=match.detail,
             static_fields=extracted.static_fields, fk_refs=extracted.fk_refs,
-            deferred_fk=extracted.deferred_fk_refs, preview_payload=preview_payload,
+            deferred_fk=extracted.deferred_fk_refs, polymorphic_fk=extracted.polymorphic_fk_refs,
+            preview_payload=preview_payload,
             dropped_custom_fields=extracted.dropped_custom_fields,
             target_id=match.target_id, execution_status="pending",
         )
@@ -258,14 +299,14 @@ def _plan_one_object(
         return PlannedItem(
             object_type=type_spec.key, source_id=source_id, source_natural_key=natural_key,
             planned_action="skip", match_detail=match.detail,
-            static_fields={}, fk_refs={}, deferred_fk={}, preview_payload={},
+            static_fields={}, fk_refs={}, deferred_fk={}, polymorphic_fk={}, preview_payload={},
             dropped_custom_fields=[], target_id=None, execution_status="done",
         )
     if match.outcome == MatchOutcome.AMBIGUOUS:
         return PlannedItem(
             object_type=type_spec.key, source_id=source_id, source_natural_key=natural_key,
             planned_action="ambiguous", match_detail=match.detail,
-            static_fields={}, fk_refs={}, deferred_fk={}, preview_payload={},
+            static_fields={}, fk_refs={}, deferred_fk={}, polymorphic_fk={}, preview_payload={},
             dropped_custom_fields=[], target_id=None, execution_status="error",
             error_detail=f"Ambiguous match, needs manual mapping: {match.detail}",
         )
@@ -288,7 +329,8 @@ def _plan_one_object(
         object_type=type_spec.key, source_id=source_id, source_natural_key=natural_key,
         planned_action="create", match_detail=match.detail,
         static_fields=extracted.static_fields, fk_refs=extracted.fk_refs,
-        deferred_fk=extracted.deferred_fk_refs, preview_payload=preview_payload,
+        deferred_fk=extracted.deferred_fk_refs, polymorphic_fk=extracted.polymorphic_fk_refs,
+        preview_payload=preview_payload,
         dropped_custom_fields=extracted.dropped_custom_fields,
         target_id=None, execution_status="pending",
     )
@@ -382,6 +424,7 @@ def persist_plan(db: Any, job_id: str, plan: PlanResult) -> None:
             job_id=job_id, order_index=order_index,
             object_type=patch.object_type, source_id=patch.source_id,
             patch_fields_json=json.dumps(patch.patch_fields),
+            polymorphic_patch_fields_json=json.dumps(patch.polymorphic_patch_fields),
         ))
 
     db.commit()
