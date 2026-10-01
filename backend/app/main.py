@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse
 from app.auth import get_current_user_optional
 from app.config import settings
 from app.database import Base, SessionLocal, engine
-from app.routers import auth, device_types, drift, fleet, github, instances, search
+from app.routers import auth, device_types, drift, fleet, github, instances, search, tenant_permissions
 from app.routers import audit as audit_router
 from app.routers import custom_fields
 from app.routers import syslog as syslog_router
@@ -97,6 +97,7 @@ app.include_router(fleet.router)
 app.include_router(custom_fields.router)
 app.include_router(syslog_router.router)
 app.include_router(access_router.router)
+app.include_router(tenant_permissions.router)
 
 
 def _run_scheduled_drift_check():

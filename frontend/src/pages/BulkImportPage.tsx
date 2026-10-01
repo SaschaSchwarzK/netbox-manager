@@ -2,15 +2,18 @@ import { Fragment, useEffect, useState } from "react";
 import {
   githubApi, GithubTarget, instancesApi, NetboxInstance,
   bulkImportApi, importFromNetboxApi, BulkImportResult, DeviceTypePreview,
+  ndxApi,
 } from "../api/client";
 
-type SourceType = "github" | "netbox";
+type SourceType = "ndx" | "github" | "netbox";
 
 interface Candidate {
   key: string; // unique per candidate; for github this is the source path, for netbox "manufacturer/slug"
   manufacturer?: string;
   model?: string;
   slug?: string;
+  partNumber?: string;
+  vendorSlug?: string; // NDX only
   path?: string; // github only
 }
 
@@ -38,6 +41,7 @@ function DeviceTypePreviewDetail({ preview }: { preview: DeviceTypePreview | "lo
       <p style={{ marginBottom: 6 }}>
         <strong>{preview.manufacturer ?? "?"} {preview.model ?? "?"}</strong>{" "}
         <span className="mono" style={{ color: "var(--muted)" }}>{preview.slug}</span>
+        {preview.part_number && <> · Part number <span className="mono">{preview.part_number}</span></>}
       </p>
       {componentEntries.length > 0 && (
         <p style={{ color: "var(--muted)", marginBottom: 6 }}>
@@ -70,7 +74,8 @@ export default function BulkImportPage() {
   const [selectedTarget, setSelectedTarget] = useState("");
   const [instances, setInstances] = useState<NetboxInstance[]>([]);
 
-  const [sourceType, setSourceType] = useState<SourceType>("github");
+  const [sourceType, setSourceType] = useState<SourceType>("ndx");
+  const [ndxQuery, setNdxQuery] = useState("");
 
   // GitHub-library source config
   const [sourceRepo, setSourceRepo] = useState("netbox-community/devicetype-library");
@@ -114,13 +119,23 @@ export default function BulkImportPage() {
     setScanError(null);
     resetResults();
     try {
-      if (sourceType === "github") {
+      if (sourceType === "ndx") {
+        const found = await ndxApi.search(selectedTarget, ndxQuery);
+        setCandidates(found.map((entry) => ({
+          key: `${entry.vendor_slug}/${entry.slug}`, vendorSlug: entry.vendor_slug,
+          manufacturer: entry.manufacturer, model: entry.model, slug: entry.slug,
+          partNumber: entry.part_number ?? undefined,
+        })));
+      } else if (sourceType === "github") {
         const found = await bulkImportApi.scan(selectedTarget, sourceRepo, sourceBranch, sourceBaseDir, sourcePat || undefined);
-        setCandidates(found.map((e) => ({ key: e.path, path: e.path, manufacturer: e.manufacturer_guess ?? undefined, slug: e.slug_guess ?? undefined })));
+        setCandidates(found.map((e) => ({
+          key: e.path, path: e.path, manufacturer: e.manufacturer_guess ?? undefined,
+          model: e.model ?? undefined, slug: e.slug_guess ?? undefined, partNumber: e.part_number ?? undefined,
+        })));
       } else {
         if (!sourceInstance) return;
         const found = await importFromNetboxApi.scan(selectedTarget, sourceInstance);
-        setCandidates(found.map((e) => ({ key: `${e.manufacturer}/${e.slug}`, manufacturer: e.manufacturer, model: e.model, slug: e.slug })));
+        setCandidates(found.map((e) => ({ key: `${e.manufacturer}/${e.slug}`, manufacturer: e.manufacturer, model: e.model, slug: e.slug, partNumber: e.part_number ?? undefined })));
       }
     } catch (err: any) {
       setScanError(err.message ?? "Scan failed.");
@@ -132,7 +147,8 @@ export default function BulkImportPage() {
   const filtered = (candidates ?? []).filter((c) => {
     if (!filter.trim()) return true;
     const f = filter.toLowerCase();
-    return (c.path ?? "").toLowerCase().includes(f) || (c.manufacturer ?? "").toLowerCase().includes(f) || (c.model ?? "").toLowerCase().includes(f);
+    return (c.path ?? "").toLowerCase().includes(f) || (c.manufacturer ?? "").toLowerCase().includes(f)
+      || (c.model ?? "").toLowerCase().includes(f) || (c.partNumber ?? "").toLowerCase().includes(f);
   });
 
   const toggle = (key: string) => {
@@ -151,9 +167,11 @@ export default function BulkImportPage() {
     if (previews[c.key] && previews[c.key] !== "error") return; // already fetched (or in flight)
     setPreviews((prev) => ({ ...prev, [c.key]: "loading" }));
     try {
-      const preview = sourceType === "github"
-        ? await bulkImportApi.preview(selectedTarget, sourceRepo, sourceBranch, c.path!, sourcePat || undefined)
-        : await importFromNetboxApi.preview(selectedTarget, sourceInstance, c.manufacturer!, c.slug!);
+      const preview = sourceType === "ndx"
+        ? await ndxApi.preview(selectedTarget, c.vendorSlug!, c.slug!)
+        : sourceType === "github"
+          ? await bulkImportApi.preview(selectedTarget, sourceRepo, sourceBranch, c.path!, sourcePat || undefined)
+          : await importFromNetboxApi.preview(selectedTarget, sourceInstance, c.manufacturer!, c.slug!);
       setPreviews((prev) => ({ ...prev, [c.key]: preview }));
     } catch {
       setPreviews((prev) => ({ ...prev, [c.key]: "error" }));
@@ -166,7 +184,12 @@ export default function BulkImportPage() {
     try {
       const chosen = (candidates ?? []).filter((c) => selected.has(c.key));
       let res: BulkImportResult;
-      if (sourceType === "github") {
+      if (sourceType === "ndx") {
+        res = await ndxApi.import(selectedTarget, {
+          selections: chosen.map((c) => ({ vendor_slug: c.vendorSlug!, slug: c.slug! })),
+          pr_title: prTitle || undefined,
+        });
+      } else if (sourceType === "github") {
         res = await bulkImportApi.import(selectedTarget, {
           source_repo: sourceRepo, source_branch: sourceBranch, source_pat: sourcePat || undefined,
           paths: chosen.map((c) => c.path!), pr_title: prTitle || undefined,
@@ -200,7 +223,7 @@ export default function BulkImportPage() {
     <div>
       <h1>Bulk Import</h1>
       <p className="page-subtitle">
-        Import device types from either a GitHub device-type library or directly from a NetBox instance, select the
+        Import device types from NetBox Data Exchange, a GitHub device-type library, or directly from a NetBox instance; select the
         ones you want, and land them all in <strong>one pull request</strong> — not one PR per file. Once that PR is
         reviewed and merged, propagate them to other instances the normal way, from the Device Types page.
       </p>
@@ -218,6 +241,9 @@ export default function BulkImportPage() {
       <div className="card">
         <h2>Source</h2>
         <div className="tabs" style={{ marginBottom: 12 }}>
+          <button className={sourceType === "ndx" ? "active" : ""} onClick={() => { setSourceType("ndx"); resetResults(); }}>
+            NetBox Data Exchange
+          </button>
           <button className={sourceType === "github" ? "active" : ""} onClick={() => { setSourceType("github"); resetResults(); }}>
             GitHub library
           </button>
@@ -226,7 +252,13 @@ export default function BulkImportPage() {
           </button>
         </div>
 
-        {sourceType === "github" ? (
+        {sourceType === "ndx" ? (
+          <div className="form-row">
+            <label>Search NDX by manufacturer, model/name, or part number</label>
+            <input value={ndxQuery} onChange={(e) => setNdxQuery(e.target.value)} placeholder="e.g. Cisco C9300 or AX1000" />
+            <div className="field-help">Uses the public NDX catalog; up to 200 matching device types are shown.</div>
+          </div>
+        ) : sourceType === "github" ? (
           <>
             <div className="form-row">
               <label>Source repo (owner/repo)</label>
@@ -256,8 +288,8 @@ export default function BulkImportPage() {
           </div>
         )}
 
-        <button className="primary" disabled={scanning || (sourceType === "github" ? !sourceRepo : !sourceInstance)} onClick={handleScan}>
-          {scanning ? "Scanning…" : "Scan"}
+        <button className="primary" disabled={scanning || (sourceType === "github" ? !sourceRepo : sourceType === "netbox" ? !sourceInstance : !ndxQuery.trim())} onClick={handleScan}>
+          {scanning ? "Searching…" : sourceType === "ndx" ? "Search NDX" : "Scan"}
         </button>
         {scanError && <p style={{ color: "var(--danger)", fontSize: 13 }}>{scanError}</p>}
       </div>
@@ -266,7 +298,7 @@ export default function BulkImportPage() {
         <div className="card">
           <h2>Select device types ({candidates.length} found{filter ? `, ${filtered.length} shown` : ""})</h2>
           <div className="toolbar">
-            <input placeholder="Filter by manufacturer or model…" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ maxWidth: 280 }} />
+            <input placeholder="Filter manufacturer, model, part number…" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ maxWidth: 320 }} />
             <button onClick={selectAllFiltered}>Select all shown</button>
             <button onClick={clearSelection}>Clear selection</button>
             <span className="pill">{selected.size} selected</span>
@@ -275,7 +307,7 @@ export default function BulkImportPage() {
             <table>
               <thead>
                 <tr>
-                  <th></th><th>Manufacturer</th><th>{sourceType === "github" ? "Slug (guessed)" : "Model"}</th>
+                  <th></th><th>Manufacturer</th><th>Model</th><th>Part number</th>
                   <th>{sourceType === "github" ? "Path" : "Slug"}</th><th></th>
                 </tr>
               </thead>
@@ -285,7 +317,8 @@ export default function BulkImportPage() {
                     <tr>
                       <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(c.key)} onChange={() => toggle(c.key)} /></td>
                       <td>{c.manufacturer ?? "—"}</td>
-                      <td className="mono">{(sourceType === "github" ? c.slug : c.model) ?? "—"}</td>
+                      <td>{c.model ?? (sourceType === "github" ? c.slug : "—")}</td>
+                      <td className="mono">{c.partNumber ?? "—"}</td>
                       <td className="mono" style={{ color: "var(--muted)" }}>{(sourceType === "github" ? c.path : c.slug) ?? "—"}</td>
                       <td>
                         <button onClick={() => handlePreview(c)} style={{ padding: "2px 8px" }}>
@@ -295,7 +328,7 @@ export default function BulkImportPage() {
                     </tr>
                     {expandedPreview === c.key && (
                       <tr>
-                        <td colSpan={5} style={{ background: "var(--panel-raised)" }}>
+                        <td colSpan={6} style={{ background: "var(--panel-raised)" }}>
                           <DeviceTypePreviewDetail preview={previews[c.key]} />
                         </td>
                       </tr>

@@ -3,6 +3,7 @@ import yaml from "js-yaml";
 import {
   githubApi, GithubTarget, instancesApi, NetboxInstance,
   customFieldsApi, CustomFieldsTemplateFile, InstanceCustomFieldsDiffResult, ImportCandidate,
+  InstanceScopePreview,
 } from "../api/client";
 import { CustomFieldsDiffView } from "../components/DiffView";
 import CustomFieldForm from "../components/CustomFieldForm";
@@ -35,6 +36,14 @@ export default function CustomFieldsPage() {
   const [selectedInstances, setSelectedInstances] = useState<string[]>([]);
   const [overwrite, setOverwrite] = useState(false);
   const [pushResults, setPushResults] = useState<{ target: string; status: string; detail?: string }[]>([]);
+  const [pushPreviews, setPushPreviews] = useState<InstanceScopePreview[] | null>(null);
+  const [backupEnabled, setBackupEnabled] = useState(true);
+  const [scopeConfirmations, setScopeConfirmations] = useState<Record<string, string>>({});
+  const [backupOptOutConfirmations, setBackupOptOutConfirmations] = useState<Record<string, string>>({});
+  const [previewingPush, setPreviewingPush] = useState(false);
+  const [restoreInstance, setRestoreInstance] = useState("");
+  const [restoreBackup, setRestoreBackup] = useState<Record<string, any> | null>(null);
+  const [restoreResult, setRestoreResult] = useState<any>(null);
   const [diffResults, setDiffResults] = useState<InstanceCustomFieldsDiffResult[] | null>(null);
   const [diffing, setDiffing] = useState(false);
   const [importInstance, setImportInstance] = useState("");
@@ -175,9 +184,48 @@ export default function CustomFieldsPage() {
     }
   };
 
+  const handlePreviewPush = async () => {
+    setPreviewingPush(true);
+    setPushResults([]);
+    try {
+      setPushPreviews(await customFieldsApi.previewPush(selectedTarget, selectedInstances, [], overwrite, backupEnabled));
+    } finally {
+      setPreviewingPush(false);
+    }
+  };
+
+  const downloadBackup = (preview: InstanceScopePreview) => {
+    if (!preview.backup) return;
+    const blob = new Blob([JSON.stringify(preview.backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `netbox-custom-fields-${preview.instance_name}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handlePush = async () => {
-    const results = await customFieldsApi.push(selectedTarget, selectedInstances, [], overwrite);
+    if (!pushPreviews) return;
+    const confirmations: Record<string, Record<string, any>> = {};
+    for (const preview of pushPreviews) {
+      if (!preview.reductions.length || !preview.confirmation_token) continue;
+      if (backupEnabled) downloadBackup(preview);
+      confirmations[preview.instance_id] = {
+        token: preview.confirmation_token,
+        typed_field_names: scopeConfirmations[preview.instance_id] ?? "",
+        backup_acknowledged: backupEnabled && !!preview.backup,
+        backup_opt_out_confirmation: backupOptOutConfirmations[preview.instance_id] ?? null,
+      };
+    }
+    const results = await customFieldsApi.push(selectedTarget, selectedInstances, [], overwrite, confirmations);
     setPushResults(results);
+    setPushPreviews(null);
+  };
+
+  const handleRestore = async (dryRun: boolean) => {
+    if (!restoreInstance || !restoreBackup) return;
+    setRestoreResult(await customFieldsApi.restore(selectedTarget, restoreInstance, restoreBackup, dryRun));
   };
 
   const handleDiff = async () => {
@@ -249,7 +297,7 @@ export default function CustomFieldsPage() {
                       <td className="mono">{f.name}</td>
                       <td>{f.label || "—"}</td>
                       <td>{f.type}</td>
-                      <td>{(f.content_types ?? []).length} model(s)</td>
+                      <td>{(f.object_types ?? []).length} model(s)</td>
                       <td>{f.required ? "Yes" : "No"}</td>
                       <td className="list-table-actions">
                         <button onClick={() => setFieldFormOpen({ index: idx })} style={{ padding: "2px 8px" }}>Edit</button>{" "}
@@ -397,25 +445,82 @@ export default function CustomFieldsPage() {
                     <input
                       type="checkbox" style={{ width: "auto", marginRight: 6 }}
                       checked={selectedInstances.includes(inst.id)}
-                      onChange={(e) => setSelectedInstances((prev) =>
-                        e.target.checked ? [...prev, inst.id] : prev.filter((x) => x !== inst.id))}
+                      onChange={(e) => { setPushPreviews(null); setSelectedInstances((prev) =>
+                        e.target.checked ? [...prev, inst.id] : prev.filter((x) => x !== inst.id)); }}
                     />
                     {inst.name}
                     {inst.requires_approved_pr && <span className="pill" style={{ marginLeft: 6 }}>🔒 needs approved PR</span>}
                   </label>
                 ))}
                 <label style={{ display: "block", margin: "10px 0" }}>
-                  <input type="checkbox" style={{ width: "auto", marginRight: 6 }} checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
+                  <input type="checkbox" style={{ width: "auto", marginRight: 6 }} checked={overwrite}
+                    onChange={(e) => { setOverwrite(e.target.checked); setPushPreviews(null); }} />
                   Overwrite existing fields/choice sets
                 </label>
+                {overwrite && (
+                  <label style={{ display: "block", margin: "10px 0" }}>
+                    <input type="checkbox" style={{ width: "auto", marginRight: 6 }} checked={backupEnabled}
+                      onChange={(e) => { setBackupEnabled(e.target.checked); setPushPreviews(null); }} />
+                    Download a JSON backup before any custom-field scope reduction (recommended)
+                  </label>
+                )}
                 <div className="toolbar">
                   <button disabled={selectedInstances.length === 0 || diffing} onClick={handleDiff}>
                     {diffing ? "Checking…" : "Check drift"}
                   </button>
-                  <button className="primary" disabled={selectedInstances.length === 0} onClick={handlePush}>
-                    Push to {selectedInstances.length || ""} instance(s)
+                  <button className="primary" disabled={selectedInstances.length === 0 || previewingPush} onClick={handlePreviewPush}>
+                    {previewingPush ? "Inspecting values…" : `Review push to ${selectedInstances.length || ""} instance(s)`}
                   </button>
                 </div>
+
+                {pushPreviews && pushPreviews.map((preview) => (
+                  <div key={preview.instance_id} className="card" style={{ borderColor: preview.reductions.length ? "var(--danger)" : "var(--success)" }}>
+                    <h3>{preview.instance_name}</h3>
+                    {preview.error ? <p style={{ color: "var(--danger)" }}>{preview.error}</p> : preview.reductions.length === 0 ? (
+                      <p style={{ color: "var(--success)" }}>No custom-field scope reduction detected.</p>
+                    ) : (
+                      <>
+                        <p style={{ color: "var(--danger)", fontWeight: 600 }}>
+                          Removing these object types will permanently strip custom-field values in NetBox.
+                        </p>
+                        {preview.reductions.map((reduction) => (
+                          <div key={reduction.field_name} style={{ marginBottom: 12 }}>
+                            <strong className="mono">{reduction.field_name}</strong>
+                            {reduction.object_types.map((row) => (
+                              <div key={row.object_type} style={{ fontSize: 13, marginTop: 4 }}>
+                                <span className="mono">{row.object_type}</span>: {row.meaningful_count} meaningful value(s)
+                                across {row.raw_count} record(s) ({row.counting_method === "cf_empty_filter" ? "server-side filter" : "client-side count"})
+                                {row.sample.length > 0 && (
+                                  <ul>{row.sample.map((sample) => <li key={String(sample.id)}>{sample.display} (#{sample.id}): {JSON.stringify(sample.value)}</li>)}</ul>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                        <div className="form-row">
+                          <label>Type <span className="mono">{preview.confirmation_text}</span> to confirm</label>
+                          <input className="mono" value={scopeConfirmations[preview.instance_id] ?? ""}
+                            onChange={(e) => setScopeConfirmations((old) => ({ ...old, [preview.instance_id]: e.target.value }))} />
+                        </div>
+                        {backupEnabled && preview.backup && (
+                          <button onClick={() => downloadBackup(preview)}>Download backup now</button>
+                        )}
+                        {!backupEnabled && (
+                          <div className="form-row">
+                            <label>Backup opt-out: type <span className="mono">NO BACKUP {preview.confirmation_text}</span></label>
+                            <input className="mono" value={backupOptOutConfirmations[preview.instance_id] ?? ""}
+                              onChange={(e) => setBackupOptOutConfirmations((old) => ({ ...old, [preview.instance_id]: e.target.value }))} />
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ))}
+                {pushPreviews && (
+                  <button className="primary" disabled={pushPreviews.some((p) => !!p.error)} onClick={handlePush}>
+                    Apply reviewed push
+                  </button>
+                )}
 
                 {diffResults && diffResults.map((r) => (
                   <div key={r.instance_id} className="card" style={{ background: "var(--panel-raised)" }}>
@@ -433,6 +538,39 @@ export default function CustomFieldsPage() {
                     {r.target}: {r.detail}
                   </p>
                 ))}
+              </div>
+
+              <div className="card">
+                <h2>Restore custom-field values</h2>
+                <p style={{ color: "var(--muted)", fontSize: 13 }}>
+                  Upload a backup created during scope-reduction review. Dry-run verifies the hash, instance, records, and values without changing NetBox.
+                </p>
+                <div className="form-row">
+                  <label>Instance</label>
+                  <select value={restoreInstance} onChange={(e) => setRestoreInstance(e.target.value)}>
+                    <option value="">— select instance —</option>
+                    {instances.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>Backup JSON</label>
+                  <input type="file" accept="application/json,.json" onChange={async (e) => {
+                    const selected = e.target.files?.[0];
+                    try {
+                      setRestoreBackup(selected ? JSON.parse(await selected.text()) : null);
+                      setRestoreResult(null);
+                    } catch {
+                      setRestoreBackup(null);
+                      setRestoreResult({ error: "The selected file is not valid JSON." });
+                    }
+                  }} />
+                </div>
+                <div className="toolbar">
+                  <button disabled={!restoreInstance || !restoreBackup} onClick={() => handleRestore(true)}>Dry run</button>
+                  <button className="danger" disabled={!restoreInstance || !restoreBackup}
+                    onClick={() => confirm("Re-add object types and restore these custom-field values?") && handleRestore(false)}>Apply restore</button>
+                </div>
+                {restoreResult && <pre className="yaml-preview mono">{JSON.stringify(restoreResult, null, 2)}</pre>}
               </div>
             </div>
           )}

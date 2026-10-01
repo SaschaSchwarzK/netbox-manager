@@ -1,4 +1,10 @@
 from dataclasses import dataclass
+from io import BytesIO
+from collections import OrderedDict
+import hashlib
+import re
+import time
+from zipfile import ZipFile
 
 import requests
 import yaml
@@ -13,6 +19,24 @@ class RepoFile:
 
 class RepoAccessError(Exception):
     """Raised when the configured repo/branch can't be reached with the stored PAT."""
+
+
+_metadata_cache: OrderedDict[tuple[str, str, str, str], tuple[float, list[dict]]] = OrderedDict()
+_MAX_METADATA_CACHE_ENTRIES = 4
+_MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
+_MAX_YAML_BYTES = 1024 * 1024
+_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def validate_source_coordinates(repo_name: str, branch: str) -> None:
+    if not _REPO_RE.fullmatch(repo_name) or any(part in (".", "..") for part in repo_name.split("/")):
+        raise ValueError("Source repository must be in owner/repository form.")
+    if not branch or ".." in branch or branch.startswith("/") or branch.endswith("/"):
+        raise ValueError("Invalid source branch name.")
+
+
+def _text(value) -> str | None:
+    return None if value is None else str(value)
 
 
 def _repo(pat: str, repo_name: str):
@@ -74,6 +98,63 @@ def list_device_types(pat: str, repo_name: str, branch: str, base_dir: str) -> l
         if entry.path.endswith((".yml", ".yaml")):
             files.append(RepoFile(path=entry.path, sha=entry.sha))
     return files
+
+
+def scan_device_type_metadata(pat: str, repo_name: str, branch: str, base_dir: str) -> list[dict]:
+    """Download one repository archive and read searchable YAML metadata in memory."""
+    validate_source_coordinates(repo_name, branch)
+    pat_hash = hashlib.sha256(pat.encode()).hexdigest()[:16]
+    cache_key = (repo_name, branch, base_dir.strip("/"), pat_hash)
+    cached = _metadata_cache.get(cache_key)
+    if cached and time.monotonic() - cached[0] < 900:
+        _metadata_cache.move_to_end(cache_key)
+        return cached[1]
+    headers = {"Accept": "application/vnd.github+json"}
+    if pat:
+        headers["Authorization"] = f"token {pat}"
+    response = requests.get(
+        f"https://api.github.com/repos/{repo_name}/zipball/{branch}",
+        headers=headers,
+        stream=True,
+        timeout=90,
+    )
+    response.raise_for_status()
+    raw = bytearray()
+    for chunk in response.iter_content(chunk_size=1024 * 1024):
+        raw.extend(chunk)
+        if len(raw) > _MAX_ARCHIVE_BYTES:
+            raise ValueError(f"GitHub archive exceeds {_MAX_ARCHIVE_BYTES // (1024 * 1024)} MiB limit")
+    base_dir = base_dir.strip("/")
+    results = []
+    with ZipFile(BytesIO(raw)) as archive:
+        for info in archive.infolist():
+            name = info.filename
+            parts = name.split("/", 1)
+            if len(parts) != 2:
+                continue
+            path = parts[1]
+            if not path.endswith((".yml", ".yaml")) or (base_dir and not path.startswith(base_dir + "/")):
+                continue
+            if info.file_size > _MAX_YAML_BYTES:
+                continue
+            try:
+                payload = yaml.safe_load(archive.read(name)) or {}
+            except (yaml.YAMLError, UnicodeDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            results.append({
+                "path": path,
+                "manufacturer": _text(payload.get("manufacturer")),
+                "model": _text(payload.get("model")),
+                "slug": _text(payload.get("slug")),
+                "part_number": _text(payload.get("part_number")),
+            })
+    _metadata_cache[cache_key] = (time.monotonic(), results)
+    _metadata_cache.move_to_end(cache_key)
+    while len(_metadata_cache) > _MAX_METADATA_CACHE_ENTRIES:
+        _metadata_cache.popitem(last=False)
+    return results
 
 
 def get_file(pat: str, repo_name: str, branch: str, path: str) -> dict:

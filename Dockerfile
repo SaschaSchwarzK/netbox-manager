@@ -57,6 +57,8 @@ COPY frontend frontend
 RUN cd frontend && npm run build
 
 COPY backend/app /app/app
+COPY config /app/config
+COPY templates /app/templates
 COPY deploy/serve.py /app/serve.py
 COPY Caddyfile /app/Caddyfile
 RUN mkdir -p /app/data /app/certs && chown -R 65532:65532 /app
@@ -74,6 +76,8 @@ ENV PATH="/app/venv/bin:$PATH" \
 COPY --from=caddy-builder /out/caddy /usr/bin/caddy
 COPY --from=app-builder --chown=65532:65532 /app/venv /app/venv
 COPY --from=app-builder --chown=65532:65532 /app/app /app/app
+COPY --from=app-builder --chown=65532:65532 /app/config /app/config
+COPY --from=app-builder --chown=65532:65532 /app/templates /app/templates
 COPY --from=app-builder --chown=65532:65532 /app/serve.py /app/serve.py
 COPY --from=app-builder --chown=65532:65532 /app/Caddyfile /app/Caddyfile
 COPY --from=app-builder --chown=65532:65532 /build/frontend/dist /app/frontend

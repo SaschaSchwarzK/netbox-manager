@@ -143,7 +143,40 @@ Setting this up requires registering this app with your identity provider as a c
 - **Token expiry warnings** — the same Fleet page checks GitHub PAT expiry (via the `github-authentication-token-expiration` response header GitHub sets on fine-grained and expiring classic PATs) and, best-effort, NetBox token expiry (via `/api/users/tokens/` — only reliable when a token can see exactly one token, itself; if multiple are visible we say so rather than guessing which one is active). Badges flag anything expired or expiring within 14 days.
 - **Cross-instance coverage** — on the Device Types list, "Check coverage" per row answers "which instances have this device type, and are they up to date?" across *every* configured instance, not just ones it's been pushed to before (that's Drift) or a subset you've selected (that's the push-time diff preview).
 
-- **Bulk import** (**Bulk Import** page) — two source types, selected via a tab: a **GitHub library** (scans a source repo's device-type directory, defaults to `netbox-community/devicetype-library` but works against any fork; scanning is cheap — one git-trees API call, with manufacturer/slug in the picker guessed from the file path rather than fetched from content, since fetching content for every one of the ~4000 files in the real community library would be slow and rate-limit-hungry) or a **NetBox instance** (scans every device type already defined there, full detail fetched only for what you select). Either way you filter/multi-select from the results and land everything in **one shared branch and one pull request** against your target repo rather than flooding it with one PR per file — both source types reuse the same underlying commit/PR machinery. Files that already exist at their destination path are skipped rather than overwritten. Propagating an import on to *other* NetBox instances is a deliberate separate step, once the PR is reviewed and merged, using the normal Publish tab — pushing straight out of an unreviewed import would bypass the PR-only and approval-gate guarantees the rest of the app relies on.
+### Custom-field values in device-type YAML
+
+Device-type files use NetBox's native bulk-import columns for custom-field values. A custom field
+named `eol_date` is written as a top-level `cf_eol_date` key, which keeps every repository file
+directly importable through NetBox's device-type YAML import page:
+
+```yaml
+manufacturer: Cisco
+model: C9300-24P
+slug: c9300-24p
+cf_eol_date: "2030-12-31"
+cf_support_tier: gold
+cf_replacement_cost: 4200
+cf_requires_license: true
+```
+
+The field type is defined once in the separate custom-fields template and is not repeated in each
+device-type file. Before manual import, that custom field must already exist in NetBox and include
+`dcim.devicetype` in its `object_types`. Dates should use quoted ISO `YYYY-MM-DD` values; booleans
+and numbers remain native YAML values; selection fields use their stored value rather than their
+display label. Object custom fields typically contain a NetBox object ID and therefore are not
+portable between instances.
+
+NetBox Manager displays these values through its structured custom-field editor. At the boundaries
+it converts `cf_<name>` YAML keys to the REST API's nested `custom_fields` object and back again.
+Legacy manager files containing a nested `custom_fields` mapping remain readable and are converted
+to NetBox-native `cf_*` keys when next saved.
+
+- **Bulk import** (**Bulk Import** page) — imports from the public **NetBox Data Exchange
+  (NDX)** catalog, a GitHub device-type library, or another NetBox instance. NDX search covers
+  manufacturer, model, and part number and downloads the selected public YAML definitions. GitHub
+  scans download one repository archive and parse searchable metadata without making one API call
+  per file. All sources support filtering by manufacturer, model, and part number and land selected
+  definitions in one shared branch and one pull request. Existing destination files are skipped.
 
 ## Troubleshooting
 
@@ -178,13 +211,29 @@ and create/delete resources; a resource-scoped admin may edit that resource and 
 
 A second GitHub-backed workflow, parallel to device-types: a single YAML file per repo (`custom_fields_path` on the GitHub target, default `custom-fields/template.yml`, in its own folder separate from device-types) listing every custom field and custom field choice set that should exist across the fleet.
 
+NetBox Manager supports **NetBox 4.6.8 or newer**. Custom-field operations verify the version through
+`/api/status/` and report a clear error for older or unverifiable instances. Template YAML uses the
+`object_types` scope key from the supported NetBox API; pre-4.x `content_types` input is not supported.
+
 - **Custom Fields** page — proper create/edit forms for both custom fields and choice sets, grouped into the same sections NetBox's own forms use (General / Values / Behavior / Validation Rules for fields; Name/Base Choices/Extra Choices/Order for choice sets), not a flat spreadsheet. Field coverage now matches NetBox's actual model, including several previously-missing attributes verified against NetBox's own source and docs: `unique`, `search_weight`, `comments`, `related_object_type` and `related_object_filter` (for object/multiobject fields), and `base_choices` (referencing a predefined choice set like IATA airport codes, ISO 3166 country codes, or UN/LOCODE, alongside or instead of custom choices). The "Model(s)" picker groups common content types (DCIM/IPAM/Virtualization/Tenancy/Circuits/Wireless/VPN) with checkboxes, plus free-text entry for anything not listed. Type-specific fields (choice set, related object type, validation rules) only appear for the field types they actually apply to, same as NetBox conditionally showing/hiding form sections.
 - **PR-only saves** — identical workflow to device-types: no direct commits, an auto-generated/editable commit message and PR description, the same actor-attribution trailer, and reuse of the same open-PR detection so repeated saves land on the same PR.
 - **Import from an instance** — scans the instance's custom fields/choice sets, compares them against the current template, and shows only what's **missing from the template** or **differs from it** (field-by-field, via the same diff engine used for drift). Nothing is pulled in blind: you pick which of those items to import, and only the selected ones get merged into the template — everything else in the template is left untouched. That merged result is then saved as a PR, same as any other save.
 - **Push to instance(s)** — creates missing fields/choice sets on selected instances; existing ones (matched by name) are only touched if "Overwrite" is checked. Choice sets are pushed before fields, since a field can reference one by name. Instances tagged "require an approved, merged PR" are gated exactly like device-type pushes.
+- **Scope-reduction guard and recovery** — overwrite first previews every object type being removed
+  from a field, counts records and meaningful non-default values, and shows samples. Applying requires
+  a short-lived signed confirmation plus typing the affected field name(s). A JSON backup is enabled
+  by default and downloaded by the browser before apply; opting out requires a second typed warning.
+  Backups are never stored by the manager. The restore panel verifies the record hash and instance,
+  supports a dry run, re-adds the removed object types, restores each surviving record, and reports
+  deleted records as skipped. Backup construction is capped at 100,000 records and 25 MiB.
 - **Drift check** — for selected instances, reports what's in the template but missing on the instance, what's on the instance but *not* in the template (someone added a field by hand), and what differs between the two.
 - **Choice sets cover both custom choices and predefined ones** — `extra_choices` (the actual value/label pairs, i.e. what NetBox calls "custom field choices," consolidated under choice sets since NetBox 3.5) and `base_choices` (referencing one of NetBox's predefined built-in choice sets instead of/alongside custom ones) are both part of the template schema, fetched from instances, diffed, and pushed.
 - All of this reuses the device-type module's audit logging, actor trailer, tag-based bulk selection, and approval-gate logic rather than duplicating it — the custom-fields router imports those helpers directly from `routers/device_types.py`.
+
+NetBox 4.6.8 and 4.7.0 source confirm support for the `cf_<field>__empty` filter used to
+reduce transfer volume during previews. If an instance rejects that filter, the manager falls back
+to paginating `id`, `display`, `url`, and `custom_fields` and counting client-side; the preview shows
+which method was used.
 
 ### Audit log
 
@@ -196,6 +245,38 @@ rather than being left blank.
 Because every GitHub commit in this app goes through one shared PAT, GitHub's own commit authorship can't show the real person who requested a change — so the backend appends a `Requested via NetBox Manager by: <name> <email>` trailer to every PR body server-side, after whatever the user typed in the editable description field. This happens unconditionally on the backend, so it survives even if the user's local edits to that field happened to remove it.
 
 The **Audit Log** page lists all of this, newest first: timestamp, actor, action type (GitHub save vs. NetBox push), target, device-type path, status, and detail.
+
+## Tenant permission automation
+
+The **Tenant Permissions** page manages GitHub-backed CRUD permission templates, onboards a tenant
+to a selected NetBox instance, applies template updates fleet-wide, and decommissions managed
+tenants. Template validation cross-checks the canonical relation registry and RBAC blocklist before
+anything is applied. Resolved RO/RW grants and metadata are committed on a bot branch and exposed
+through a pull request; the target repository's base branch is never written directly.
+
+The page highlights every explicitly unscoped grant, derives read-only permissions automatically
+unless a separate RO template is selected, and refuses group-name collisions. It does not alter
+group membership: the existing OIDC login automation remains responsible for matching users to
+groups. Tenants are selected and tracked by their immutable NetBox numeric ID; names are retained
+only for display, so renaming a tenant cannot break or silently broaden a grant.
+
+Only templates and managed-tenant metadata merged into the configured base branch can drive a
+NetBox change; content on an open pull-request branch is never applied. Fleet template changes have
+a read-only plan step showing creates, updates, deletions, errors, and unscoped grants before the
+administrator confirms the operation. NetBox mutations require the administrator role on every
+affected instance.
+
+To verify direct tenant relationships against the exact NetBox installation, run the registry
+checker inside that installation's Django environment:
+
+```sh
+/opt/netbox/venv/bin/python scripts/check_tenant_relations.py \
+  --registry config/tenant-relations.yaml
+```
+
+The checker validates direct `Tenant` foreign keys only. Indirect paths such as
+`device__tenant` and unsupported generic relationships still require manual review; missing
+registry entries remain fail-closed.
 
 ## Known limitations
 

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ---------- NetBox instances ----------
@@ -120,6 +120,7 @@ class DeviceTypeSummary(BaseModel):
     manufacturer: Optional[str] = None
     model: Optional[str] = None
     slug: Optional[str] = None
+    part_number: Optional[str] = None
 
 
 class CreateDeviceTypeRequest(BaseModel):
@@ -286,6 +287,7 @@ class DeviceTypePreview(BaseModel):
     manufacturer: Optional[str] = None
     model: Optional[str] = None
     slug: Optional[str] = None
+    part_number: Optional[str] = None
     component_counts: dict[str, int] = {}
     custom_fields: dict[str, Any] = {}
 
@@ -301,6 +303,8 @@ class BulkImportScanEntry(BaseModel):
     path: str
     manufacturer_guess: Optional[str] = None
     slug_guess: Optional[str] = None
+    model: Optional[str] = None
+    part_number: Optional[str] = None
 
 
 class BulkImportPreviewRequest(BaseModel):
@@ -344,6 +348,7 @@ class ImportFromNetboxScanEntry(BaseModel):
     manufacturer: str
     model: str
     slug: str
+    part_number: Optional[str] = None
     u_height: Optional[float] = None
 
 
@@ -359,6 +364,34 @@ class ImportFromNetboxPreviewRequest(DeviceTypeKey):
 class ImportFromNetboxRequest(BaseModel):
     instance_id: str
     selections: list[DeviceTypeKey]
+    commit_message: Optional[str] = None
+    pr_title: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class NdxSearchRequest(BaseModel):
+    query: str = ""
+    limit: int = 200
+
+
+class NdxSearchEntry(BaseModel):
+    vendor_slug: str
+    vendor_name: str
+    manufacturer: str
+    model: str
+    slug: str
+    part_number: Optional[str] = None
+    u_height: Optional[float] = None
+    source: Optional[str] = None
+
+
+class NdxDeviceKey(BaseModel):
+    vendor_slug: str
+    slug: str
+
+
+class NdxImportRequest(BaseModel):
+    selections: list[NdxDeviceKey] = Field(max_length=100)
     commit_message: Optional[str] = None
     pr_title: Optional[str] = None
     pr_body: Optional[str] = None
@@ -462,10 +495,31 @@ class ImportCustomFieldsSelectionRequest(BaseModel):
     pr_body: Optional[str] = None
 
 
+class CustomFieldScopeConfirmation(BaseModel):
+    token: str
+    typed_field_names: str
+    backup_acknowledged: bool = False
+    backup_opt_out_confirmation: Optional[str] = None
+
+
 class PushCustomFieldsRequest(BaseModel):
     instance_ids: list[str] = []
     tags: list[str] = []
     overwrite: bool = False
+    confirmations: dict[str, CustomFieldScopeConfirmation] = {}
+
+
+class PreviewCustomFieldsPushRequest(BaseModel):
+    instance_ids: list[str] = []
+    tags: list[str] = []
+    overwrite: bool = False
+    include_backup: bool = True
+
+
+class RestoreCustomFieldsRequest(BaseModel):
+    instance_id: str
+    backup: dict[str, Any]
+    dry_run: bool = True
 
 
 class InstanceCustomFieldsDiffResult(BaseModel):

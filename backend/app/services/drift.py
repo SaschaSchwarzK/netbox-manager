@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from app import crypto, models
 from app.services import diff as diff_mod
+from app.devicetype_schema import DeviceType
 from app.services import github_repo, netbox_client, netbox_customfields
 
 _MAX_WORKERS = 8
@@ -168,7 +169,7 @@ def check_device_type_pair(db: Session, instance_id: str, repo_target_id: str, f
     else:
         try:
             pat = crypto.decrypt(target.pat_encrypted)
-            source = github_repo.get_file(pat, target.repo, target.branch, file_path)["payload"]
+            source = DeviceType(**github_repo.get_file(pat, target.repo, target.branch, file_path)["payload"]).to_internal_dict()
             token = crypto.decrypt(instance.api_token_encrypted)
             existing = netbox_client.get_existing_device_type(
                 instance.base_url, token, instance.verify_ssl, source["manufacturer"], source["slug"]

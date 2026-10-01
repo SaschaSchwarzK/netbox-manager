@@ -47,7 +47,7 @@ interface Props {
 
 function blankField(): Record<string, any> {
   return {
-    name: "", label: "", group_name: "", description: "", content_types: [], weight: 100, comments: "",
+    name: "", label: "", group_name: "", description: "", object_types: [], weight: 100, comments: "",
     type: "text", required: false, unique: false, default: null,
     choice_set: null, related_object_type: "", related_object_filter: null,
     filter_logic: "loose", search_weight: 1000, ui_visible: "always", ui_editable: "yes", is_cloneable: false,
@@ -64,15 +64,15 @@ export default function CustomFieldForm({ initial, existingNames, choiceSetNames
   const set = (key: string, v: any) => setValue((prev) => ({ ...prev, [key]: v }));
 
   const toggleContentType = (ct: string) => {
-    const list: string[] = value.content_types ?? [];
-    set("content_types", list.includes(ct) ? list.filter((c) => c !== ct) : [...list, ct]);
+    const list: string[] = value.object_types ?? [];
+    set("object_types", list.includes(ct) ? list.filter((c) => c !== ct) : [...list, ct]);
   };
 
   const addCustomContentType = () => {
     const ct = customContentType.trim();
     if (!ct) return;
-    const list: string[] = value.content_types ?? [];
-    if (!list.includes(ct)) set("content_types", [...list, ct]);
+    const list: string[] = value.object_types ?? [];
+    if (!list.includes(ct)) set("object_types", [...list, ct]);
     setCustomContentType("");
   };
 
@@ -80,7 +80,7 @@ export default function CustomFieldForm({ initial, existingNames, choiceSetNames
     if (!value.name.trim()) { setError("Name is required."); return; }
     if (!/^[a-zA-Z0-9_]+$/.test(value.name)) { setError("Name may only contain letters, numbers, and underscores."); return; }
     if (existingNames.includes(value.name)) { setError("A custom field with this name already exists."); return; }
-    if ((value.content_types ?? []).length === 0) { setError("Select at least one model this field applies to."); return; }
+    if ((value.object_types ?? []).length === 0) { setError("Select at least one model this field applies to."); return; }
     if (CHOICE_TYPES.includes(value.type) && !value.choice_set) { setError("Selection fields must specify a choice set."); return; }
     if (OBJECT_TYPES.includes(value.type) && !value.related_object_type) { setError("Object fields must specify a related object type."); return; }
 
@@ -98,7 +98,7 @@ export default function CustomFieldForm({ initial, existingNames, choiceSetNames
     types: g.types.filter((t) => !contentTypeFilter.trim() || t.label.toLowerCase().includes(contentTypeFilter.toLowerCase()) || t.value.includes(contentTypeFilter.toLowerCase())),
   })).filter((g) => g.types.length > 0);
 
-  const extraSelectedContentTypes: string[] = (value.content_types ?? []).filter(
+  const extraSelectedContentTypes: string[] = (value.object_types ?? []).filter(
     (ct: string) => !CONTENT_TYPE_GROUPS.some((g) => g.types.some((t) => t.value === ct))
   );
 
@@ -120,7 +120,7 @@ export default function CustomFieldForm({ initial, existingNames, choiceSetNames
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "2px 12px" }}>
                     {g.types.map((t) => (
                       <label key={t.value}>
-                        <input type="checkbox" style={{ width: "auto" }} checked={(value.content_types ?? []).includes(t.value)} onChange={() => toggleContentType(t.value)} />
+                        <input type="checkbox" style={{ width: "auto" }} checked={(value.object_types ?? []).includes(t.value)} onChange={() => toggleContentType(t.value)} />
                         {t.label}
                       </label>
                     ))}

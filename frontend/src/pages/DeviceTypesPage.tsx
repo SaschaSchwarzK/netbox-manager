@@ -19,6 +19,7 @@ export default function DeviceTypesPage() {
   const [newForm, setNewForm] = useState({ manufacturer: "", model: "", slug: "" });
   const [importError, setImportError] = useState<string | null>(null);
   const [coverage, setCoverage] = useState<Record<string, CoverageEntry[] | "loading" | "error">>({});
+  const [filter, setFilter] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
@@ -40,6 +41,13 @@ export default function DeviceTypesPage() {
   const openEditor = (path: string) => {
     navigate(`/device-types/${selectedTarget}/edit?path=${encodeURIComponent(path)}`);
   };
+
+  const shownFiles = files.filter((file) => {
+    const query = filter.trim().toLowerCase();
+    if (!query) return true;
+    return [file.manufacturer, file.model, file.part_number, file.slug, file.path]
+      .some((value) => (value ?? "").toLowerCase().includes(query));
+  });
 
   // "New" and "Import" only stage a draft in memory (router state) — nothing
   // is written to GitHub until the user hits Save in the editor.
@@ -102,6 +110,8 @@ export default function DeviceTypesPage() {
         </select>
         <button className="primary" onClick={() => setShowNewForm((s) => !s)}>+ New from scratch</button>
         <button onClick={() => fileInput.current?.click()}>Import YAML file</button>
+        <input value={filter} onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter manufacturer, model, part number…" style={{ maxWidth: 300 }} />
         <input ref={fileInput} type="file" accept=".yml,.yaml" style={{ display: "none" }} onChange={handleImportFile} />
       </div>
       {importError && <p style={{ color: "var(--danger)", fontSize: 13 }}>{importError}</p>}
@@ -133,15 +143,16 @@ export default function DeviceTypesPage() {
       <div className="card">
         <table>
           <thead>
-            <tr><th>Manufacturer</th><th>Model</th><th>Slug</th><th>Path</th><th>Coverage (which instances have it)</th></tr>
+            <tr><th>Manufacturer</th><th>Model</th><th>Part number</th><th>Slug</th><th>Path</th><th>Coverage (which instances have it)</th></tr>
           </thead>
           <tbody>
-            {files.map((f) => {
+            {shownFiles.map((f) => {
               const cov = coverage[f.path];
               return (
                 <tr key={f.path}>
                   <td>{f.manufacturer ?? "—"}</td>
                   <td><a onClick={() => openEditor(f.path)} style={{ cursor: "pointer", color: "var(--accent)" }}>{f.model ?? f.path}</a></td>
+                  <td className="mono">{f.part_number ?? "—"}</td>
                   <td className="mono">{f.slug ?? "—"}</td>
                   <td className="mono" style={{ color: "var(--muted)" }}>{f.path}</td>
                   <td>
@@ -165,11 +176,11 @@ export default function DeviceTypesPage() {
                 </tr>
               );
             })}
-            {!loading && files.length === 0 && (
-              <tr><td colSpan={5} style={{ color: "var(--muted)" }}>No device types in this repo yet.</td></tr>
+            {!loading && shownFiles.length === 0 && (
+              <tr><td colSpan={6} style={{ color: "var(--muted)" }}>No matching device types.</td></tr>
             )}
             {loading && (
-              <tr><td colSpan={5} style={{ color: "var(--muted)" }}>Loading from GitHub…</td></tr>
+              <tr><td colSpan={6} style={{ color: "var(--muted)" }}>Loading from GitHub…</td></tr>
             )}
           </tbody>
         </table>

@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import uuid
 
 import yaml
+import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from github import GithubException
 from sqlalchemy.orm import Session
@@ -12,7 +13,7 @@ from app.database import get_db
 from app.devicetype_schema import COMPONENT_ENDPOINTS, DeviceType
 from app.rbac import AccessContext, filter_scoped, get_access_context, has_role_at_least, require_role, require_visible, role_for_resource
 from app.services import diff as diff_mod
-from app.services import github_repo, netbox_client
+from app.services import github_repo, ndx_client, netbox_client
 from app.services.github_repo import RepoAccessError
 
 router = APIRouter(prefix="/api/repos/{target_id}/device-types", tags=["device-types"])
@@ -37,6 +38,10 @@ def _github_error_to_http(exc: Exception) -> HTTPException:
     if isinstance(exc, GithubException):
         detail = exc.data.get("message", str(exc)) if isinstance(exc.data, dict) else str(exc)
         return HTTPException(exc.status if isinstance(exc.status, int) else 502, f"GitHub API error: {detail}")
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        status = exc.response.status_code
+        mapped = status if status in (401, 403, 404) else 502
+        return HTTPException(mapped, f"GitHub archive request failed: HTTP {status}")
     return HTTPException(500, str(exc))
 
 
@@ -50,14 +55,18 @@ def _with_actor_trailer(pr_body: str | None, actor: dict) -> str:
     who = actor["name"] or "anonymous"
     if actor.get("email"):
         who = f"{who} <{actor['email']}>"
-    trailer = f"\n\n---\nRequested via NetBox Manager by: {who}"
+    username = actor.get("username")
+    username_line = f"\nOIDC username: {username}" if username else ""
+    trailer = f"\n\n---\nRequested via NetBox Manager by: {who}{username_line}"
     return (pr_body or "").rstrip() + trailer
 
 
 def _log_action(db: Session, *, repo_target_id: str, file_path: str, target_name: str,
-                 status: str, detail: str | None, actor: dict) -> None:
+                 status: str, detail: str | None, actor: dict,
+                 action_type: str = "github") -> None:
+    """Persist one audit event; the ORM insert also forwards it to syslog."""
     db.add(models.DeviceTypePushHistory(
-        repo_target_id=repo_target_id, file_path=file_path, target_type="github", target_name=target_name,
+        repo_target_id=repo_target_id, file_path=file_path, target_type=action_type, target_name=target_name,
         status=status, detail=detail,
         actor_sub=actor.get("sub"), actor_name=actor.get("name"), actor_email=actor.get("email"),
     ))
@@ -70,7 +79,7 @@ def _to_preview(validated: DeviceType) -> schemas.DeviceTypePreview:
     component_counts = {key: len(data.get(key) or []) for key in COMPONENT_ENDPOINTS}
     component_counts = {k: v for k, v in component_counts.items() if v}
     return schemas.DeviceTypePreview(
-        manufacturer=validated.manufacturer, model=validated.model, slug=validated.slug,
+        manufacturer=validated.manufacturer, model=validated.model, slug=validated.slug, part_number=validated.part_number,
         component_counts=component_counts, custom_fields=validated.custom_fields,
     )
 
@@ -91,9 +100,10 @@ def list_device_types(target_id: str, db: Session = Depends(get_db), ctx: Access
             payload = content["payload"] or {}
             summaries.append(schemas.DeviceTypeSummary(
                 path=f.path,
-                manufacturer=payload.get("manufacturer"),
-                model=payload.get("model"),
-                slug=payload.get("slug"),
+                manufacturer=str(payload["manufacturer"]) if payload.get("manufacturer") is not None else None,
+                model=str(payload["model"]) if payload.get("model") is not None else None,
+                slug=str(payload["slug"]) if payload.get("slug") is not None else None,
+                part_number=str(payload["part_number"]) if payload.get("part_number") is not None else None,
             ))
         except Exception:
             # Skip files that aren't parseable YAML device-types rather than failing the whole list.
@@ -111,8 +121,12 @@ def get_device_type(target_id: str, path: str = Query(...), db: Session = Depend
         open_pr = github_repo.get_open_pr(pat, target.repo, target.branch, path)
     except Exception as exc:
         raise _github_error_to_http(exc)
+    try:
+        normalized = DeviceType(**result["payload"]).to_internal_dict()
+    except Exception as exc:
+        raise HTTPException(422, f"Repository device-type YAML is invalid: {exc}")
     return schemas.DeviceTypeFileOut(
-        repo_target_id=target_id, path=path, sha=result["sha"], payload=result["payload"], open_pr=open_pr
+        repo_target_id=target_id, path=path, sha=result["sha"], payload=normalized, open_pr=open_pr
     )
 
 
@@ -262,7 +276,7 @@ def coverage(target_id: str, path: str = Query(...), db: Session = Depends(get_d
     target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     try:
-        source = github_repo.get_file(pat, target.repo, target.branch, path)["payload"]
+        source = DeviceType(**github_repo.get_file(pat, target.repo, target.branch, path)["payload"]).to_internal_dict()
     except Exception as exc:
         raise _github_error_to_http(exc)
 
@@ -297,23 +311,23 @@ def bulk_import_scan(
     ctx: AccessContext = Depends(require_role("editor")),
 ):
     """
-    Lists every .yml/.yaml file under the source repo's device-type directory.
-    Cheap by design (one git-trees API call) — manufacturer/slug are guessed
-    from the path, not fetched from file content, so this stays fast even
-    against something the size of the full community library.
+    Downloads the repository archive once and reads searchable metadata from
+    every device-type YAML without making one GitHub API call per file.
     """
     target = _get_target(target_id, db, ctx)
     source_pat = payload.source_pat or crypto.decrypt(target.pat_encrypted)
     try:
-        files = github_repo.list_device_types(source_pat, payload.source_repo, payload.source_branch, payload.source_base_dir)
+        github_repo.validate_source_coordinates(payload.source_repo, payload.source_branch)
+        files = github_repo.scan_device_type_metadata(
+            source_pat, payload.source_repo, payload.source_branch, payload.source_base_dir
+        )
     except Exception as exc:
         raise _github_error_to_http(exc)
 
-    entries = []
-    for f in files:
-        manufacturer, slug = github_repo.guess_manufacturer_slug(f.path)
-        entries.append(schemas.BulkImportScanEntry(path=f.path, manufacturer_guess=manufacturer, slug_guess=slug))
-    return entries
+    return [schemas.BulkImportScanEntry(
+        path=item["path"], manufacturer_guess=item.get("manufacturer"), slug_guess=item.get("slug"),
+        model=item.get("model"), part_number=item.get("part_number"),
+    ) for item in files]
 
 
 @router.post("/bulk-import/preview", response_model=schemas.DeviceTypePreview)
@@ -330,6 +344,7 @@ def bulk_import_preview(
     target = _get_target(target_id, db, ctx)
     source_pat = payload.source_pat or crypto.decrypt(target.pat_encrypted)
     try:
+        github_repo.validate_source_coordinates(payload.source_repo, payload.source_branch)
         content = github_repo.get_file(source_pat, payload.source_repo, payload.source_branch, payload.path)
     except Exception as exc:
         raise _github_error_to_http(exc)
@@ -357,6 +372,10 @@ def bulk_import(
 
     if not payload.paths:
         raise HTTPException(400, "No files selected to import.")
+    try:
+        github_repo.validate_source_coordinates(payload.source_repo, payload.source_branch)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
     files_to_commit = []
     prevalidation_failures = []
@@ -422,6 +441,100 @@ def bulk_import(
         branch=branch_name, pr_number=pr_number, pr_url=pr_url,
         imported=commit_result["created"], skipped_existing=commit_result["skipped"], failed=all_failed,
     )
+
+
+@router.post("/ndx/search", response_model=list[schemas.NdxSearchEntry])
+def ndx_search(target_id: str, payload: schemas.NdxSearchRequest, db: Session = Depends(get_db),
+               ctx: AccessContext = Depends(require_role("editor"))):
+    _get_target(target_id, db, ctx)
+    try:
+        return ndx_client.search(payload.query, max(1, min(payload.limit, 500)))
+    except Exception as exc:
+        raise HTTPException(502, f"Could not search the NDX catalog: {exc}")
+
+
+@router.post("/ndx/preview", response_model=schemas.DeviceTypePreview)
+def ndx_preview(target_id: str, payload: schemas.NdxDeviceKey, db: Session = Depends(get_db),
+                ctx: AccessContext = Depends(require_role("editor"))):
+    _get_target(target_id, db, ctx)
+    try:
+        return _to_preview(DeviceType(**ndx_client.get_yaml(payload.vendor_slug, payload.slug)))
+    except Exception as exc:
+        raise HTTPException(502, f"Could not load this NDX device type: {exc}")
+
+
+@router.post("/ndx/import", response_model=schemas.BulkImportResult)
+def ndx_import(target_id: str, payload: schemas.NdxImportRequest, request: Request,
+               db: Session = Depends(get_db), ctx: AccessContext = Depends(require_role("editor"))):
+    target = _get_target(target_id, db, ctx)
+    if not payload.selections:
+        raise HTTPException(400, "No NDX device types selected to import.")
+    pat = crypto.decrypt(target.pat_encrypted)
+    actor = get_current_actor(request)
+    files_to_commit, failures = [], []
+
+    def fetch_selection(selection):
+        source_key = f"{selection.vendor_slug}/{selection.slug}"
+        try:
+            validated = DeviceType(**ndx_client.get_yaml(selection.vendor_slug, selection.slug))
+            destination = target.path_pattern.format(
+                manufacturer=validated.manufacturer, slug=validated.slug, model=validated.model
+            )
+            return {"path": destination, "payload": validated.to_yaml_dict(), "source": source_key}, None
+        except Exception as exc:
+            return None, schemas.BulkImportFailure(path=source_key, error=str(exc))
+
+    with ThreadPoolExecutor(max_workers=min(8, len(payload.selections))) as executor:
+        futures = [executor.submit(fetch_selection, selection) for selection in payload.selections]
+        for future in as_completed(futures):
+            item, failure = future.result()
+            if item:
+                files_to_commit.append(item)
+            if failure:
+                failures.append(failure)
+    audit_file_path = f"ndx-import ({len(payload.selections)} device types)"
+    if not files_to_commit and failures:
+        detail = f"Could not download any selected NDX definitions: {failures[0].error}"
+        _log_action(db, repo_target_id=target_id, file_path=audit_file_path,
+                    target_name=target.name, status="error", detail=detail, actor=actor)
+        raise HTTPException(502, detail)
+
+    branch_name = f"import-from-ndx/{uuid.uuid4().hex[:10]}"
+    try:
+        commit_result = github_repo.bulk_create_files(
+            pat, target.repo, target.branch, branch_name, files_to_commit,
+            payload.commit_message or "Import device types from NetBox Data Exchange",
+        )
+    except Exception as exc:
+        _log_action(db, repo_target_id=target_id, file_path=audit_file_path,
+                    target_name=target.name, status="error", detail=str(exc), actor=actor)
+        raise _github_error_to_http(exc)
+    failures += [schemas.BulkImportFailure(**item) for item in commit_result["failed"]]
+    pr_number = pr_url = None
+    if commit_result["created"]:
+        title = payload.pr_title or f"Import {len(commit_result['created'])} device types from NDX"
+        body = payload.pr_body or "\n".join([
+            f"Imports {len(commit_result['created'])} device type(s) from NetBox Data Exchange:", "",
+            *[f"- NDX `{item['source']}` -> `{item['path']}`" for item in files_to_commit
+              if item["path"] in commit_result["created"]],
+        ])
+        try:
+            pr = github_repo.open_bulk_pr(
+                pat, target.repo, branch_name, target.branch, title, _with_actor_trailer(body, actor)
+            )
+            pr_number, pr_url = pr["pr_number"], pr["pr_url"]
+        except Exception as exc:
+            failures.append(schemas.BulkImportFailure(path="(PR creation)", error=str(exc)))
+    detail = f"Imported {len(commit_result['created'])}, skipped {len(commit_result['skipped'])}, failed {len(failures)}."
+    _log_action(db, repo_target_id=target_id, file_path=audit_file_path,
+                target_name=target.name, status="success" if commit_result["created"] else "error",
+                detail=detail, actor=actor)
+    return schemas.BulkImportResult(
+        branch=branch_name, pr_number=pr_number, pr_url=pr_url, imported=commit_result["created"],
+        skipped_existing=commit_result["skipped"], failed=failures,
+    )
+
+
 @router.post("/import-from-netbox/scan", response_model=list[schemas.ImportFromNetboxScanEntry])
 def import_from_netbox_scan(
     target_id: str, payload: schemas.ImportFromNetboxScanRequest, db: Session = Depends(get_db),
@@ -567,7 +680,7 @@ def diff_with_netbox(
     target = _get_target(target_id, db, ctx)
     pat = crypto.decrypt(target.pat_encrypted)
     try:
-        source = github_repo.get_file(pat, target.repo, target.branch, path)["payload"]
+        source = DeviceType(**github_repo.get_file(pat, target.repo, target.branch, path)["payload"]).to_internal_dict()
     except Exception as exc:
         raise _github_error_to_http(exc)
 
