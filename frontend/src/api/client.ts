@@ -679,3 +679,67 @@ export const customFieldsApi = {
       method: "POST", body: JSON.stringify({ instance_ids, tags, overwrite: false }),
     }),
 };
+
+// ---------- Data migration ----------
+
+export interface MigrationType {
+  type: string;
+  label: string;
+  dependencies: string[];
+  optional_dependencies: string[];
+}
+
+export interface MigrationMappingOverride {
+  action: "map" | "skip" | "create";
+  target_id?: number | null;
+}
+
+export interface MigrationPlanRequest {
+  source_instance_id: string;
+  target_instance_id: string;
+  selected_types: string[];
+  tenant_filter: string[];
+  include_untenanted?: boolean;
+  mapping_overrides?: Record<string, MigrationMappingOverride>;
+  conflict_policy?: Record<string, string>;
+  marker_tag?: boolean;
+  max_requests_per_second?: number;
+  job_id?: string | null;
+}
+
+export type MigrationJobStatus =
+  | "planned" | "running" | "completed" | "completed_with_errors" | "failed" | "cancelled";
+
+export interface MigrationJobSummary {
+  id: string;
+  source_instance_id: string;
+  target_instance_id: string;
+  source_instance_name?: string | null;
+  target_instance_name?: string | null;
+  status: MigrationJobStatus;
+  phase: "primary" | "patch" | "done";
+  tenant_filter: string[];
+  selected_types: string[];
+  totals: Record<string, Record<string, number>>;
+  warnings: string[];
+  created_at: string;
+  started_at?: string | null;
+  last_heartbeat_at?: string | null;
+  finished_at?: string | null;
+  actor_name?: string | null;
+}
+
+export const migrationsApi = {
+  types: () => request<MigrationType[]>("/migrations/types"),
+  plan: (data: MigrationPlanRequest) =>
+    request<MigrationJobSummary>("/migrations/plan", { method: "POST", body: JSON.stringify(data) }),
+  jobs: () => request<MigrationJobSummary[]>("/migrations/jobs"),
+  job: (id: string) => request<MigrationJobSummary>(`/migrations/jobs/${id}`),
+  execute: (id: string) =>
+    request<MigrationJobSummary>(`/migrations/jobs/${id}/execute`, {
+      method: "POST", body: JSON.stringify({ confirm: true }),
+    }),
+  cancel: (id: string) => request<MigrationJobSummary>(`/migrations/jobs/${id}/cancel`, { method: "POST" }),
+  retryFailed: (id: string) => request<MigrationJobSummary>(`/migrations/jobs/${id}/retry-failed`, { method: "POST" }),
+  reportUrl: (id: string) => `/api/migrations/jobs/${id}/report`,
+};

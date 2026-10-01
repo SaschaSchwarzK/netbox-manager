@@ -516,6 +516,49 @@ class PreviewCustomFieldsPushRequest(BaseModel):
     include_backup: bool = True
 
 
+class MigrationMappingOverride(BaseModel):
+    action: str  # "map" | "skip" | "create"
+    target_id: int | None = None
+
+
+class MigrationPlanRequest(BaseModel):
+    source_instance_id: str
+    target_instance_id: str
+    selected_types: list[str]
+    tenant_filter: list[str] = []
+    include_untenanted: bool = False
+    # Key is "type_key:source_id", e.g. "dcim.site:12" — JSON object keys must be strings,
+    # so the (type, id) tuple used internally is encoded/decoded at the router boundary.
+    mapping_overrides: dict[str, MigrationMappingOverride] = {}
+    conflict_policy: dict[str, str] = {}  # "default" plus any per-type override; skip/update/update_empty_only
+    marker_tag: bool = True
+    max_requests_per_second: float = 4.0
+    job_id: str | None = None  # re-plan an existing job in place (e.g. after editing the mapping table)
+
+
+class MigrationJobSummary(BaseModel):
+    id: str
+    source_instance_id: str
+    target_instance_id: str
+    source_instance_name: str | None = None
+    target_instance_name: str | None = None
+    status: str
+    phase: str
+    tenant_filter: list[str]
+    selected_types: list[str]
+    totals: dict
+    warnings: list[str]
+    created_at: datetime
+    started_at: datetime | None
+    last_heartbeat_at: datetime | None
+    finished_at: datetime | None
+    actor_name: str | None = None
+
+
+class MigrationExecuteRequest(BaseModel):
+    confirm: bool = False
+
+
 class RestoreCustomFieldsRequest(BaseModel):
     instance_id: str
     backup: dict[str, Any]

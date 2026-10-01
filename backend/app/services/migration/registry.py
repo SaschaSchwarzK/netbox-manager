@@ -1,0 +1,297 @@
+"""
+Loads and validates config/migration-registry.yaml: the single source of
+truth for which NetBox object types the migration feature knows about, their
+pynetbox endpoints, their dependency graph, and how to match an object
+against an existing one on the target instance.
+
+Mirrors the fail-closed validation style of app.tenant_permissions
+(load_policy_files / validate_template): a malformed registry raises at load
+time rather than producing confusing behavior mid-migration.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+_HERE = Path(__file__).resolve()
+ROOT = next(
+    (candidate for candidate in (_HERE.parents[4], _HERE.parents[3])
+     if (candidate / "config/migration-registry.yaml").exists()),
+    _HERE.parents[4],
+)
+
+
+class MigrationRegistryError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class MatchStrategy:
+    fields: tuple[str, ...]
+    fk_fields: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TypeSpec:
+    key: str
+    endpoint: str
+    ui_path: str
+    selectable: bool
+    dependencies: tuple[str, ...]
+    optional_dependencies: tuple[str, ...]
+    field_map: dict[str, str]
+    # FK fields deliberately EXCLUDED from the dependency graph because
+    # including them would create a cycle at the type level (a device's
+    # primary_ip4 points at an IP address, which may be assigned to an
+    # interface, which belongs BACK to that same device). There is no
+    # ordering guarantee that the referenced type is resolved by the time
+    # this type is processed, so these fields are never resolved inline —
+    # they always go through build_payload's "defer" path and end up as a
+    # MigrationJobPatch, applied once every phase-`primary` item is done.
+    deferred_field_map: dict[str, str]
+    tenant_relation: str | None
+    tenant_filterable: bool
+    match_strategies: tuple[MatchStrategy, ...]
+    out_of_scope: bool = False
+    out_of_scope_reason: str | None = None
+    self_parent_field: str | None = None
+
+    @property
+    def all_dependencies(self) -> tuple[str, ...]:
+        """
+        Every OTHER type this one references, required or optional — used for
+        the type-level graph/ordering. Self-references (a region's optional
+        parent region, a site group's parent group, a location's parent
+        location) are intentionally excluded here: they don't affect the
+        order in which types are processed relative to each other, only the
+        order objects of that same type must be created in (parent before
+        child) — which the planner handles separately, by sorting each
+        type's objects on their parent-chain depth.
+        """
+        return tuple(dict.fromkeys(d for d in (*self.dependencies, *self.optional_dependencies) if d != self.key))
+
+    @property
+    def all_field_map(self) -> dict[str, str]:
+        """field_map + deferred_field_map merged — every FK field this type has, for matching/sanitization."""
+        return {**self.field_map, **self.deferred_field_map}
+
+
+@dataclass(frozen=True)
+class Registry:
+    types: dict[str, TypeSpec]
+    # Full topological order (dependencies before dependents) across every
+    # type in the registry. A prefix-filtered view of this is used to order
+    # any selected subset, so ordering is always consistent across jobs.
+    topological_order: tuple[str, ...]
+
+    def field_for(self, type_key: str, dependency_key: str) -> str:
+        """
+        The source JSON field name on `type_key`'s objects that references
+        `dependency_key`. If more than one field maps to the same dependency
+        type, the first declared (dict insertion order) is returned — fine
+        for this method's callers (planner's "which field scopes this child
+        type by its parent"), which only ever deal with a single, required,
+        unambiguous parent relationship.
+        """
+        for field_name, dep_key in self.types[type_key].field_map.items():
+            if dep_key == dependency_key:
+                return field_name
+        raise MigrationRegistryError(f"{type_key} has no field_map entry for dependency {dependency_key!r}")
+
+    def all_field_map_for(self, type_key: str) -> dict[str, str]:
+        """field_map + deferred_field_map merged — every FK field this type has, for matching/sanitization."""
+        spec = self.types[type_key]
+        return {**spec.field_map, **spec.deferred_field_map}
+
+    def __getitem__(self, key: str) -> TypeSpec:
+        return self.types[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.types
+
+    def selectable_types(self) -> list[str]:
+        return sorted(k for k, spec in self.types.items() if spec.selectable and not spec.out_of_scope)
+
+    def in_scope_types(self) -> dict[str, TypeSpec]:
+        return {k: v for k, v in self.types.items() if not v.out_of_scope}
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    try:
+        value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise MigrationRegistryError(f"Cannot read YAML {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise MigrationRegistryError(f"{path}: top level must be a mapping")
+    return value
+
+
+def _parse_match_strategies(key: str, raw: Any) -> tuple[MatchStrategy, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise MigrationRegistryError(f"{key}.match_strategies must be a list")
+    strategies = []
+    for index, entry in enumerate(raw):
+        where = f"{key}.match_strategies[{index}]"
+        if not isinstance(entry, dict):
+            raise MigrationRegistryError(f"{where} must be a mapping")
+        fields = entry.get("fields")
+        fk_fields = entry.get("fk_fields", [])
+        if not isinstance(fields, list) or not fields or not all(isinstance(f, str) for f in fields):
+            raise MigrationRegistryError(f"{where}.fields must be a non-empty list of strings")
+        if not isinstance(fk_fields, list) or not all(isinstance(f, str) for f in fk_fields):
+            raise MigrationRegistryError(f"{where}.fk_fields must be a list of strings")
+        unknown_fk = set(fk_fields) - set(fields)
+        if unknown_fk:
+            raise MigrationRegistryError(f"{where}.fk_fields contains fields not in `fields`: {sorted(unknown_fk)}")
+        strategies.append(MatchStrategy(fields=tuple(fields), fk_fields=tuple(fk_fields)))
+    return tuple(strategies)
+
+
+def _parse_type(key: str, raw: Any) -> TypeSpec:
+    if not isinstance(raw, dict):
+        raise MigrationRegistryError(f"{key} must be a mapping")
+    for required in ("endpoint", "ui_path"):
+        if not isinstance(raw.get(required), str) or not raw[required].strip():
+            raise MigrationRegistryError(f"{key}.{required} must be a non-empty string")
+    dependencies = raw.get("dependencies", [])
+    optional_dependencies = raw.get("optional_dependencies", [])
+    if not isinstance(dependencies, list) or not all(isinstance(d, str) for d in dependencies):
+        raise MigrationRegistryError(f"{key}.dependencies must be a list of strings")
+    if not isinstance(optional_dependencies, list) or not all(isinstance(d, str) for d in optional_dependencies):
+        raise MigrationRegistryError(f"{key}.optional_dependencies must be a list of strings")
+    tenant_relation = raw.get("tenant_relation")
+    if tenant_relation is not None and not isinstance(tenant_relation, str):
+        raise MigrationRegistryError(f"{key}.tenant_relation must be a string or null")
+
+    field_map = raw.get("field_map", {})
+    if not isinstance(field_map, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in field_map.items()):
+        raise MigrationRegistryError(f"{key}.field_map must be a mapping of field-name -> type-key strings")
+    all_deps = set(dependencies) | set(optional_dependencies)
+    field_map_dep_values = set(field_map.values())
+    missing_map_entries = all_deps - field_map_dep_values
+    if missing_map_entries:
+        raise MigrationRegistryError(f"{key}.field_map has no field for dependencies: {sorted(missing_map_entries)}")
+    extra_map_entries = field_map_dep_values - all_deps
+    if extra_map_entries:
+        raise MigrationRegistryError(f"{key}.field_map references types not listed in dependencies: {sorted(extra_map_entries)}")
+
+    deferred_field_map = raw.get("deferred_field_map", {})
+    if not isinstance(deferred_field_map, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in deferred_field_map.items()
+    ):
+        raise MigrationRegistryError(f"{key}.deferred_field_map must be a mapping of field-name -> type-key strings")
+    overlapping_fields = set(field_map) & set(deferred_field_map)
+    if overlapping_fields:
+        raise MigrationRegistryError(f"{key}: fields {sorted(overlapping_fields)} in both field_map and deferred_field_map")
+
+    match_strategies = _parse_match_strategies(key, raw.get("match_strategies"))
+    all_fk_field_names = set(field_map) | set(deferred_field_map)
+    for strategy in match_strategies:
+        unknown_fk = set(strategy.fk_fields) - all_fk_field_names
+        if unknown_fk:
+            raise MigrationRegistryError(
+                f"{key}.match_strategies references fk_fields {sorted(unknown_fk)} "
+                f"not declared in field_map or deferred_field_map (keys: {sorted(all_fk_field_names)})"
+            )
+
+    return TypeSpec(
+        key=key,
+        endpoint=raw["endpoint"],
+        ui_path=raw["ui_path"].strip("/"),
+        selectable=bool(raw.get("selectable", False)),
+        dependencies=tuple(dependencies),
+        optional_dependencies=tuple(optional_dependencies),
+        field_map=field_map,
+        deferred_field_map=deferred_field_map,
+        tenant_relation=tenant_relation,
+        tenant_filterable=bool(raw.get("tenant_filterable", False)),
+        match_strategies=match_strategies,
+        out_of_scope=bool(raw.get("out_of_scope", False)),
+        out_of_scope_reason=raw.get("out_of_scope_reason"),
+        self_parent_field=raw.get("self_parent_field"),
+    )
+
+
+def _topological_sort(types: dict[str, TypeSpec]) -> tuple[str, ...]:
+    """
+    Kahn's algorithm over the full registry graph (dependencies + optional
+    dependencies as edges: dependency must come before dependent). Raises on
+    any cycle. A stable, deterministic order is produced by always picking
+    the lexicographically smallest ready node, so job plans are reproducible.
+    """
+    remaining_edges: dict[str, set[str]] = {k: set(spec.all_dependencies) for k, spec in types.items()}
+    ordered: list[str] = []
+    ready = sorted(k for k, deps in remaining_edges.items() if not deps)
+    visited: set[str] = set()
+    while ready:
+        node = ready.pop(0)
+        if node in visited:
+            continue
+        visited.add(node)
+        ordered.append(node)
+        newly_ready = []
+        for k, deps in remaining_edges.items():
+            if node in deps:
+                deps.discard(node)
+                if not deps and k not in visited:
+                    newly_ready.append(k)
+        ready = sorted(set(ready) | set(newly_ready))
+    if len(ordered) != len(types):
+        cyclic = sorted(set(types) - visited)
+        raise MigrationRegistryError(f"Cycle detected in migration registry dependency graph, involving: {cyclic}")
+    return tuple(ordered)
+
+
+def parse_registry(doc: dict[str, Any]) -> Registry:
+    raw_types = doc.get("types")
+    if not isinstance(raw_types, dict) or not raw_types:
+        raise MigrationRegistryError("migration-registry.yaml: `types` must be a non-empty mapping")
+    types = {key: _parse_type(key, raw) for key, raw in raw_types.items()}
+    for key, spec in types.items():
+        for dep in spec.all_dependencies:
+            if dep not in types:
+                raise MigrationRegistryError(f"{key} depends on unknown type {dep!r}")
+        for dep in spec.deferred_field_map.values():
+            if dep not in types:
+                raise MigrationRegistryError(f"{key}.deferred_field_map references unknown type {dep!r}")
+    topo = _topological_sort(types)
+    return Registry(types=types, topological_order=topo)
+
+
+_cache: Registry | None = None
+
+
+def load_registry(root: Path = ROOT, *, force_reload: bool = False) -> Registry:
+    global _cache
+    if _cache is not None and not force_reload:
+        return _cache
+    doc = _load_yaml(root / "config/migration-registry.yaml")
+    _cache = parse_registry(doc)
+    return _cache
+
+
+def resolve_selection(selected: set[str], registry: Registry) -> list[str]:
+    """
+    Transitive closure of `selected` over both required and optional
+    dependencies, returned in the registry's global topological order (so
+    dependencies always precede dependents, and ordering is stable across
+    runs regardless of selection order).
+    """
+    unknown = selected - set(registry.types)
+    if unknown:
+        raise MigrationRegistryError(f"Unknown type(s) selected: {sorted(unknown)}")
+    closure: set[str] = set()
+    frontier = set(selected)
+    while frontier:
+        closure |= frontier
+        next_frontier: set[str] = set()
+        for key in frontier:
+            spec = registry[key]
+            next_frontier |= set(spec.all_dependencies) - closure
+        frontier = next_frontier
+    return [key for key in registry.topological_order if key in closure]
