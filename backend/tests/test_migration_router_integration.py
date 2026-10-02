@@ -71,6 +71,9 @@ def _empty_list(url):
 
 
 def _mock_netbox_apis():
+    for base in (API_SRC, API_TGT):
+        responses.get(f"{base}/status/", json={"netbox-version": "4.6.8"})
+        _empty_list(f"{base}/extras/tags/")  # tags are always fetched first, regardless of selection
     # ipam.vrf (unlike dcim.site) is a user-selectable type in the registry, so it's a
     # minimal, representative choice for exercising the router end to end. It optionally
     # depends on tenancy.tenant (which itself optionally depends on tenancy.tenantgroup) —
@@ -88,8 +91,23 @@ def _mock_netbox_apis():
     _empty_list(f"{API_TGT}/ipam/vrfs/")  # no existing match -> create
     responses.post(
         f"{API_TGT}/ipam/vrfs/",
-        json={"id": 100, "name": "customer-a", "url": f"{API_TGT}/ipam/vrfs/100/"},
+        json=[{"id": 100, "name": "customer-a", "url": f"{API_TGT}/ipam/vrfs/100/"}],
         status=201,
+    )
+
+    # Marker tagging (on by default): create the tag on the target, then PATCH the created VRF.
+    responses.post(
+        f"{API_TGT}/extras/tags/",
+        json={"id": 999, "slug": "migrated-from-source", "name": "migrated-from-source"},
+        status=201,
+    )
+    responses.get(
+        f"{API_TGT}/ipam/vrfs/100/",
+        json={"id": 100, "name": "customer-a", "tags": [], "url": f"{API_TGT}/ipam/vrfs/100/"},
+    )
+    responses.patch(
+        f"{API_TGT}/ipam/vrfs/100/",
+        json={"id": 100, "name": "customer-a", "tags": [999], "url": f"{API_TGT}/ipam/vrfs/100/"},
     )
 
 

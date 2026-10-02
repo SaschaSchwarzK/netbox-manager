@@ -24,8 +24,8 @@ kicked off automatically.
 from __future__ import annotations
 
 import json
-import time
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -34,11 +34,12 @@ from app.models import MigrationJob, MigrationJobItem, MigrationJobPatch
 from app.services.migration.client import MigrationApiError, RateLimitedClient
 from app.services.migration.matcher import IdMap
 from app.services.migration.planner import LiveTargetLookup, resolve_endpoint
-from app.services.migration.registry import Registry, TypeSpec
+from app.services.migration.registry import UNIVERSAL_TAG_FIELD, UNIVERSAL_TAG_TYPE, Registry, TypeSpec
 from app.services.migration.sanitize import resolve_fk_refs, resolve_polymorphic_fk_refs
 from app.services.syslog_client import send_audit_entry
 
 HEARTBEAT_EVERY = 10  # items/patches between last_heartbeat_at updates — cheap enough to not throttle a large run
+BULK_CREATE_SIZE = 100
 
 
 class JobCancelled(Exception):
@@ -110,8 +111,11 @@ def _execute_one_item(
         created = target_client.create(endpoint, payload)
         item.target_id = created.id if hasattr(created, "id") else created["id"]
     elif item.planned_action == "update":
+        # target_id is already set (it was the matched object's real id since plan time) —
+        # restored after the bulk-create refactor accidentally dropped this branch, which
+        # left every conflict_policy="update" item hitting the else below and crashing the
+        # whole job with an uncaught AssertionError.
         target_client.update_by_id(endpoint, item.target_id, payload)
-        # target_id is already set (it was the matched object's real id since plan time).
     else:
         raise AssertionError(f"_execute_one_item called for non-executable action {item.planned_action!r}")
 
@@ -162,6 +166,81 @@ def _find_existing_by_natural_key(
     return None
 
 
+def _mark_done(db: Session, item: MigrationJobItem, target_id: int, id_map: IdMap) -> None:
+    item.target_id = target_id
+    item.execution_status = "done"
+    item.executed_at = datetime.utcnow()
+    db.commit()
+    id_map.put(item.object_type, item.source_id, target_id)
+
+
+def _execute_create_batch(
+    db: Session,
+    items: list[MigrationJobItem],
+    *,
+    registry: Registry,
+    target_client: RateLimitedClient,
+    target_lookup: LiveTargetLookup,
+    id_map: IdMap,
+    fail_fast: bool,
+) -> bool:
+    """Create independent adjacent items in one POST; return whether fail-fast stopped."""
+    prepared: list[tuple[MigrationJobItem, dict[str, Any], dict[str, Any], TypeSpec]] = []
+    for item in items:
+        type_spec = registry[item.object_type]
+        static_fields = json.loads(item.payload_json)
+        fk_refs = json.loads(item.fk_refs_json)
+        resolved_fk, unresolved_fk = resolve_fk_refs(type_spec, fk_refs, id_map=id_map)
+        if unresolved_fk:
+            item.execution_status = "error"
+            item.error_detail = f"Required dependency never resolved (skipped or ambiguous?): {sorted(unresolved_fk)}"
+            item.executed_at = datetime.utcnow()
+            db.commit()
+            if fail_fast:
+                return True
+            continue
+        existing_id = _find_existing_by_natural_key(type_spec, static_fields, resolved_fk, target_lookup)
+        if existing_id is not None:
+            _mark_done(db, item, existing_id, id_map)
+            continue
+        prepared.append((item, {**static_fields, **resolved_fk}, {**static_fields, **resolved_fk}, type_spec))
+
+    if not prepared:
+        return False
+    endpoint = resolve_endpoint(target_client.nb, prepared[0][3].endpoint)
+    try:
+        created_records = target_client.create_many(endpoint, [payload for _, payload, _, _ in prepared])
+    except MigrationApiError as exc:
+        target_lookup.clear_cache()
+        for item, payload, _, type_spec in prepared:
+            static_fields = json.loads(item.payload_json)
+            resolved_fk, _ = resolve_fk_refs(type_spec, json.loads(item.fk_refs_json), id_map=id_map)
+            existing_id = _find_existing_by_natural_key(type_spec, static_fields, resolved_fk, target_lookup)
+            if existing_id is not None:
+                _mark_done(db, item, existing_id, id_map)
+            else:
+                item.execution_status = "error"
+                item.error_detail = str(exc)
+                item.executed_at = datetime.utcnow()
+                db.commit()
+                if fail_fast:
+                    break
+        return fail_fast
+
+    for (item, payload, _, _), created in zip(prepared, created_records):
+        target_id = created.id if hasattr(created, "id") else created.get("id")
+        if target_id is None:
+            item.execution_status = "error"
+            item.error_detail = "Bulk create response did not contain an id."
+            item.executed_at = datetime.utcnow()
+            db.commit()
+            if fail_fast:
+                return True
+            continue
+        _mark_done(db, item, target_id, id_map)
+    return False
+
+
 def _execute_pending_items(
     db: Session,
     job: MigrationJob,
@@ -169,6 +248,7 @@ def _execute_pending_items(
     registry: Registry,
     target_client: RateLimitedClient,
     id_map: IdMap,
+    fail_fast: bool,
 ) -> None:
     target_lookup = LiveTargetLookup(target_client)
     counter = 0
@@ -186,6 +266,29 @@ def _execute_pending_items(
             return
         counter += 1
         _check_cancelled(db, job, counter)
+        if item.planned_action == "create":
+            batch = db.execute(
+                select(MigrationJobItem)
+                .where(
+                    MigrationJobItem.job_id == job.id,
+                    MigrationJobItem.execution_status == "pending",
+                    MigrationJobItem.object_type == item.object_type,
+                    MigrationJobItem.order_index >= item.order_index,
+                )
+                .order_by(MigrationJobItem.order_index)
+                .limit(BULK_CREATE_SIZE)
+            ).scalars().all()
+            contiguous: list[MigrationJobItem] = []
+            for candidate in batch:
+                if candidate.planned_action != "create":
+                    break
+                contiguous.append(candidate)
+            if _execute_create_batch(
+                db, contiguous, registry=registry, target_client=target_client,
+                target_lookup=target_lookup, id_map=id_map, fail_fast=fail_fast,
+            ):
+                return
+            continue
         try:
             _execute_one_item(db, item, registry=registry, target_client=target_client, target_lookup=target_lookup, id_map=id_map)
         except MigrationApiError as exc:
@@ -193,6 +296,8 @@ def _execute_pending_items(
             item.error_detail = str(exc)
             item.executed_at = datetime.utcnow()
             db.commit()
+            if fail_fast:
+                return
 
 
 def _execute_pending_patches(
@@ -202,6 +307,7 @@ def _execute_pending_patches(
     registry: Registry,
     target_client: RateLimitedClient,
     id_map: IdMap,
+    fail_fast: bool,
 ) -> None:
     counter = 0
     while True:
@@ -256,6 +362,70 @@ def _execute_pending_patches(
             patch.error_detail = str(exc)
         patch.executed_at = datetime.utcnow()
         db.commit()
+        if fail_fast and patch.execution_status == "error":
+            return
+
+
+def _apply_marker_tag(
+    db: Session,
+    job: MigrationJob,
+    *,
+    registry: Registry,
+    target_client: RateLimitedClient,
+    id_map: IdMap,
+    tag_slug: str,
+) -> None:
+    """
+    Tags every object actually CREATED by this job (never a mapped one — the
+    same "never modify a mapped object" rule conflict policy already
+    follows) with a marker tag, so a human can find and bulk-manage migrated
+    objects later. Reuses the same extras.tag type the universal `tags`
+    field resolution (see sanitize.py / registry.py's UNIVERSAL_TAG_*) is
+    built on, rather than a separate one-off mechanism.
+
+    Not tracked per-object the way phase `primary`/`patch` execution is —
+    there is no persisted row recording "this object has been marker-
+    tagged". If interrupted mid-way, re-running this step is SAFE (it
+    recomputes each object's full, exact tag list every time, so re-applying
+    is a no-op in effect) but not incremental: a resumed job re-examines
+    every created object again rather than picking up only the untagged
+    remainder. Accepted as a reasonable trade-off given how cheap and side-
+    effect-free re-checking an already-tagged object is, versus the added
+    complexity of a fully tracked fourth execution phase.
+    """
+    tag_type = registry[UNIVERSAL_TAG_TYPE]
+    tag_endpoint = resolve_endpoint(target_client.nb, tag_type.endpoint)
+    target_lookup = LiveTargetLookup(target_client)
+
+    existing_tag = target_lookup.find(tag_type, {"slug": tag_slug})
+    if existing_tag is not None:
+        marker_tag_id = existing_tag["id"]
+    else:
+        created_tag = target_client.create(tag_endpoint, {"slug": tag_slug, "name": tag_slug})
+        marker_tag_id = created_tag.id if hasattr(created_tag, "id") else created_tag["id"]
+
+    created_items = db.execute(
+        select(MigrationJobItem).where(
+            MigrationJobItem.job_id == job.id,
+            MigrationJobItem.planned_action == "create",
+            MigrationJobItem.execution_status == "done",
+            MigrationJobItem.object_type != UNIVERSAL_TAG_TYPE,  # don't tag the tags themselves
+        )
+    ).scalars().all()
+    for item in created_items:
+        type_spec = registry[item.object_type]
+        fk_refs = json.loads(item.fk_refs_json)
+        resolved_fk, unresolved = resolve_fk_refs(type_spec, fk_refs, id_map=id_map)
+        if unresolved:
+            continue  # shouldn't happen for an item already "done", but tagging must never crash the job
+        existing_tags = resolved_fk.get(UNIVERSAL_TAG_FIELD) or []
+        if marker_tag_id in existing_tags:
+            continue
+        endpoint = resolve_endpoint(target_client.nb, type_spec.endpoint)
+        try:
+            target_client.update_by_id(endpoint, item.target_id, {UNIVERSAL_TAG_FIELD: [*existing_tags, marker_tag_id]})
+        except MigrationApiError:
+            pass  # best-effort — a tagging failure must never fail the migration itself
 
 
 def execute_job(
@@ -264,6 +434,8 @@ def execute_job(
     *,
     registry: Registry,
     target_client: RateLimitedClient,
+    fail_fast: bool = False,
+    marker_tag_slug: str | None = None,
 ) -> None:
     """
     Runs `job` to completion from wherever it currently stands (fresh start
@@ -284,13 +456,45 @@ def execute_job(
 
     try:
         if job.phase == "primary":
-            _execute_pending_items(db, job, registry=registry, target_client=target_client, id_map=id_map)
-            job.phase = "patch"
-            db.commit()
+            _execute_pending_items(
+                db, job, registry=registry, target_client=target_client,
+                id_map=id_map, fail_fast=fail_fast,
+            )
+            has_pending_items = db.execute(
+                select(MigrationJobItem.id).where(
+                    MigrationJobItem.job_id == job.id,
+                    MigrationJobItem.execution_status == "pending",
+                ).limit(1)
+            ).first() is not None
+            if not (fail_fast and has_pending_items):
+                job.phase = "patch"
+                db.commit()
         if job.phase == "patch":
-            _execute_pending_patches(db, job, registry=registry, target_client=target_client, id_map=id_map)
-            job.phase = "done"
-            db.commit()
+            _execute_pending_patches(
+                db, job, registry=registry, target_client=target_client,
+                id_map=id_map, fail_fast=fail_fast,
+            )
+            has_pending_patches = db.execute(
+                select(MigrationJobPatch.id).where(
+                    MigrationJobPatch.job_id == job.id,
+                    MigrationJobPatch.execution_status == "pending",
+                ).limit(1)
+            ).first() is not None
+            if not (fail_fast and has_pending_patches):
+                job.phase = "done"
+                db.commit()
+                if marker_tag_slug:
+                    # Marker tagging is a best-effort nicety, never a reason the whole
+                    # migration fails to reach a terminal status — a failure here (e.g. the
+                    # target rejects tag creation) is recorded as a warning and the job still
+                    # completes normally.
+                    try:
+                        _apply_marker_tag(db, job, registry=registry, target_client=target_client, id_map=id_map, tag_slug=marker_tag_slug)
+                    except Exception as exc:  # noqa: BLE001 — see comment above
+                        warnings = json.loads(job.warnings_json or "[]")
+                        warnings.append(f"Marker tagging failed and was skipped: {exc}")
+                        job.warnings_json = json.dumps(warnings)
+                        db.commit()
     except JobCancelled:
         job.status = "cancelled"
         job.finished_at = datetime.utcnow()

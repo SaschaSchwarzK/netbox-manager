@@ -58,6 +58,48 @@ def test_null_fk_field_goes_to_static_fields_as_null():
     assert "tenant" not in extracted.fk_refs
 
 
+def test_self_parent_field_is_extracted_like_a_fk_ref():
+    source_obj = {"name": "Europe", "slug": "eu", "parent": {"id": 10, "slug": "root"}}
+    extracted = extract_fields(REGISTRY["dcim.region"], source_obj)
+    assert extracted.fk_refs == {"parent": 10}
+    assert "parent" not in extracted.static_fields
+
+    id_map = IdMap()
+    id_map.put("dcim.region", 10, 99)
+    resolved, unresolved = resolve_fk_refs(REGISTRY["dcim.region"], extracted.fk_refs, id_map=id_map)
+    assert resolved == {"parent": 99}
+    assert unresolved == {}
+
+
+def test_list_shaped_fk_fields_are_resolved_item_by_item():
+    from app.services.migration.registry import TypeSpec
+
+    type_spec = TypeSpec(
+        key="example.tagged",
+        endpoint="example.tagged",
+        ui_path="example/tagged",
+        selectable=False,
+        dependencies=("example.tag",),
+        optional_dependencies=(),
+        field_map={"item_tags": "example.tag"},
+        deferred_field_map={},
+        polymorphic_field_map={},
+        tenant_relation=None,
+        tenant_filterable=False,
+        match_strategies=(),
+    )
+    source_obj = {"name": "demo", "item_tags": [{"id": 11}, {"id": 12}]}
+    extracted = extract_fields(type_spec, source_obj)
+    assert extracted.fk_refs == {"item_tags": [11, 12]}
+
+    id_map = IdMap()
+    id_map.put("example.tag", 11, 111)
+    id_map.put("example.tag", 12, 222)
+    resolved, unresolved = resolve_fk_refs(type_spec, extracted.fk_refs, id_map=id_map)
+    assert resolved == {"item_tags": [111, 222]}
+    assert unresolved == {}
+
+
 def test_deferred_fk_field_kept_separate_from_regular_fk_refs():
     source_obj = {
         "name": "core-sw-1", "site": {"id": 1}, "device_type": {"id": 2}, "role": {"id": 3},

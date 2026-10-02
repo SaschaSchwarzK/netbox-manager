@@ -40,7 +40,7 @@ from app.services.migration.matcher import (
     TargetLookup,
     match_object,
 )
-from app.services.migration.registry import Registry, TypeSpec, resolve_selection
+from app.services.migration.registry import UNIVERSAL_TAG_TYPE, Registry, TypeSpec, resolve_selection
 from app.services.migration.sanitize import build_preview_payload, extract_fields, resolve_fk_refs, ExtractedFields
 
 DEFAULT_CONFLICT_POLICY = "skip"  # skip / update / update_empty_only — see ConflictPolicy
@@ -104,6 +104,9 @@ class LiveTargetLookup:
         self._cache[cache_key] = found
         return found
 
+    def clear_cache(self) -> None:
+        self._cache.clear()
+
 
 def resolve_endpoint(nb: Any, dotted: str) -> Any:
     app_name, endpoint_name = dotted.split(".")
@@ -115,6 +118,46 @@ def _natural_key_label(type_spec: TypeSpec, source_obj: dict[str, Any]) -> str:
         if source_obj.get(candidate_field):
             return str(source_obj[candidate_field])
     return f"id={source_obj.get('id')}"
+
+
+def _validate_preview_payload(
+    target_client: RateLimitedClient,
+    type_spec: TypeSpec,
+    payload: dict[str, Any],
+) -> list[str]:
+    """Use NetBox OPTIONS metadata for early field warnings without blocking a plan."""
+    options_method = getattr(target_client, "options", None)
+    if options_method is None:
+        return []
+    endpoint = resolve_endpoint(target_client.nb, type_spec.endpoint)
+    try:
+        metadata = options_method(endpoint)
+    except Exception as exc:  # noqa: BLE001 - validation metadata is advisory
+        return [f"{type_spec.key}: field validation metadata unavailable: {exc}"]
+    post_fields = ((metadata.get("actions") or {}).get("POST") or {})
+    if not isinstance(post_fields, dict) or not post_fields:
+        return [f"{type_spec.key}: NetBox did not provide POST field metadata; field validation was not performed."]
+    warnings: list[str] = []
+    for field_name, field_spec in post_fields.items():
+        if not isinstance(field_spec, dict):
+            continue
+        value = payload.get(field_name)
+        if field_spec.get("required") and value in (None, "", [], {}):
+            warnings.append(f"{type_spec.key}: required field {field_name!r} is missing from the planned payload.")
+        choices = field_spec.get("choices")
+        if value is not None and choices:
+            allowed = {choice.get("value") for choice in choices if isinstance(choice, dict)}
+            if allowed and value not in allowed:
+                warnings.append(f"{type_spec.key}: field {field_name!r} value {value!r} is not in the target choices.")
+        max_length = field_spec.get("max_length")
+        if isinstance(value, str) and isinstance(max_length, int) and len(value) > max_length:
+            warnings.append(f"{type_spec.key}: field {field_name!r} exceeds target max_length={max_length}.")
+        if value is not None and field_spec.get("read_only"):
+            warnings.append(f"{type_spec.key}: field {field_name!r} is read-only on the target.")
+    for field_name in payload:
+        if field_name not in post_fields:
+            warnings.append(f"{type_spec.key}: field {field_name!r} is not advertised by the target POST schema.")
+    return warnings
 
 
 def _depth(type_spec: TypeSpec, source_obj: dict[str, Any], by_id: dict[int, dict[str, Any]]) -> int:
@@ -163,6 +206,14 @@ def build_plan(
         raise ValueError("build_plan requires a read-only source client")
 
     resolved_types = resolve_selection(selected_types, registry)
+    if UNIVERSAL_TAG_TYPE in registry and UNIVERSAL_TAG_TYPE not in resolved_types:
+        # `tags` is deliberately not a declared dependency of anything (see registry.py's
+        # UNIVERSAL_TAG_FIELD) — it's universal rather than type-specific, so it can't be
+        # discovered by the normal referenced-only dependency closure. Every object that
+        # carries any tags needs the full tag id map available before it's processed, so
+        # extras.tag is unconditionally processed first, exactly as if it were a dependency
+        # of every selected type (which, in effect, it is).
+        resolved_types = [UNIVERSAL_TAG_TYPE, *resolved_types]
     id_map = IdMap()
     placeholders = _PlaceholderIds()
     target_lookup = LiveTargetLookup(target_client)
@@ -197,6 +248,8 @@ def build_plan(
             )
             result.items.append(item)
             type_totals[item.planned_action] = type_totals.get(item.planned_action, 0) + 1
+            if item.planned_action in ("create", "update"):
+                result.warnings.extend(_validate_preview_payload(target_client, type_spec, item.preview_payload))
 
             if item.planned_action in ("map", "update"):
                 id_map.put(type_key, item.source_id, item.target_id)

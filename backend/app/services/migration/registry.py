@@ -28,6 +28,17 @@ class MigrationRegistryError(RuntimeError):
     pass
 
 
+# Every NetBox object type carries a `tags` field (a list of nested tag
+# objects on read, a list of tag identifiers on write) — far too universal to
+# declare per-type in field_map, and NetBox's `extras.tags` endpoint has no
+# complex dependencies of its own. Handled the same way self_parent_field is:
+# as an always-present, implicit entry in TypeSpec.all_field_map, so the
+# existing list-aware FK resolution (resolve_fk_refs / sanitize.extract_fields)
+# picks it up for free instead of needing a fourth parallel field-map concept.
+UNIVERSAL_TAG_FIELD = "tags"
+UNIVERSAL_TAG_TYPE = "extras.tag"
+
+
 @dataclass(frozen=True)
 class MatchStrategy:
     fields: tuple[str, ...]
@@ -97,7 +108,9 @@ class TypeSpec:
     @property
     def all_field_map(self) -> dict[str, str]:
         """field_map + deferred_field_map merged — every static-type FK field this type has."""
-        return {**self.field_map, **self.deferred_field_map}
+        extra_self_parent = {self.self_parent_field: self.key} if self.self_parent_field else {}
+        extra_tags = {} if self.key == UNIVERSAL_TAG_TYPE else {UNIVERSAL_TAG_FIELD: UNIVERSAL_TAG_TYPE}
+        return {**self.field_map, **self.deferred_field_map, **extra_self_parent, **extra_tags}
 
 
 @dataclass(frozen=True)
@@ -117,15 +130,17 @@ class Registry:
         type by its parent"), which only ever deal with a single, required,
         unambiguous parent relationship.
         """
-        for field_name, dep_key in self.types[type_key].field_map.items():
+        spec = self.types[type_key]
+        for field_name, dep_key in spec.field_map.items():
             if dep_key == dependency_key:
                 return field_name
+        if dependency_key == spec.key and spec.self_parent_field:
+            return spec.self_parent_field
         raise MigrationRegistryError(f"{type_key} has no field_map entry for dependency {dependency_key!r}")
 
     def all_field_map_for(self, type_key: str) -> dict[str, str]:
         """field_map + deferred_field_map merged — every static-type FK field this type has."""
-        spec = self.types[type_key]
-        return {**spec.field_map, **spec.deferred_field_map}
+        return self.types[type_key].all_field_map
 
     def __getitem__(self, key: str) -> TypeSpec:
         return self.types[key]
@@ -179,6 +194,9 @@ def _parse_type(key: str, raw: Any) -> TypeSpec:
     for required in ("endpoint", "ui_path"):
         if not isinstance(raw.get(required), str) or not raw[required].strip():
             raise MigrationRegistryError(f"{key}.{required} must be a non-empty string")
+    self_parent_field = raw.get("self_parent_field")
+    if self_parent_field is not None and not isinstance(self_parent_field, str):
+        raise MigrationRegistryError(f"{key}.self_parent_field must be a string or null")
     dependencies = raw.get("dependencies", [])
     optional_dependencies = raw.get("optional_dependencies", [])
     if not isinstance(dependencies, list) or not all(isinstance(d, str) for d in dependencies):
@@ -220,6 +238,8 @@ def _parse_type(key: str, raw: Any) -> TypeSpec:
 
     match_strategies = _parse_match_strategies(key, raw.get("match_strategies"))
     all_fk_field_names = set(field_map) | set(deferred_field_map)
+    if self_parent_field:
+        all_fk_field_names.add(self_parent_field)
     for strategy in match_strategies:
         unknown_fk = set(strategy.fk_fields) - all_fk_field_names
         if unknown_fk:
@@ -243,7 +263,7 @@ def _parse_type(key: str, raw: Any) -> TypeSpec:
         match_strategies=match_strategies,
         out_of_scope=bool(raw.get("out_of_scope", False)),
         out_of_scope_reason=raw.get("out_of_scope_reason"),
-        self_parent_field=raw.get("self_parent_field"),
+        self_parent_field=self_parent_field,
     )
 
 

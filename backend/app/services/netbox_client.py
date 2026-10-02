@@ -66,6 +66,35 @@ def require_custom_fields_version(base_url: str, token: str, verify_ssl: bool) -
     return version
 
 
+def check_migration_version_compatibility(
+    source_url: str, source_token: str, source_verify_ssl: bool,
+    target_url: str, target_token: str, target_verify_ssl: bool,
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    """Read both status endpoints and return results plus non-blocking warnings."""
+    source = test_connection(source_url, source_token, source_verify_ssl)
+    target = test_connection(target_url, target_token, target_verify_ssl)
+    if not source["ok"] or not target["ok"]:
+        failed = "source" if not source["ok"] else "target"
+        detail = (source if failed == "source" else target).get("detail")
+        raise RuntimeError(f"Could not determine NetBox version for {failed}: {detail}")
+    source_version = _parse_netbox_version(source.get("netbox_version"))
+    target_version = _parse_netbox_version(target.get("netbox_version"))
+    if source_version is None or target_version is None:
+        raise RuntimeError("Could not determine NetBox version for source or target.")
+    if source_version[0] != target_version[0]:
+        raise RuntimeError(
+            f"NetBox major versions are incompatible: source={source['netbox_version']}, "
+            f"target={target['netbox_version']}."
+        )
+    warnings: list[str] = []
+    if source_version[:2] != target_version[:2]:
+        warnings.append(
+            f"Source and target use different NetBox minor versions "
+            f"({source['netbox_version']} vs {target['netbox_version']}); verify type compatibility."
+        )
+    return source, target, warnings
+
+
 def search_instance(base_url: str, token: str, verify_ssl: bool, query: str) -> dict[str, Any]:
     """
     Search devices, virtual machines, virtual device contexts (VDCs), IP

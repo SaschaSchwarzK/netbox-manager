@@ -521,6 +521,36 @@ class MigrationMappingOverride(BaseModel):
     target_id: int | None = None
 
 
+class MigrationMappingSkeletonRow(BaseModel):
+    override_key: str
+    object_type: str
+    source_id: int
+    source_natural_key: str
+    auto_match: str
+    target_id: int | None = None
+    match_detail: str | None = None
+    action: str | None = None
+
+
+class MigrationPreflightSide(BaseModel):
+    reachable: bool
+    token_valid: bool
+    netbox_version: str | None = None
+    detail: str | None = None
+    write_permission_checked: bool | None = None
+    write_permission_ok: bool | None = None
+
+
+class MigrationPreflightResponse(BaseModel):
+    source: MigrationPreflightSide
+    target: MigrationPreflightSide
+
+
+class MigrationPreflightRequest(BaseModel):
+    source_instance_id: str
+    target_instance_id: str
+
+
 class MigrationPlanRequest(BaseModel):
     source_instance_id: str
     target_instance_id: str
@@ -532,6 +562,7 @@ class MigrationPlanRequest(BaseModel):
     mapping_overrides: dict[str, MigrationMappingOverride] = {}
     conflict_policy: dict[str, str] = {}  # "default" plus any per-type override; skip/update/update_empty_only
     marker_tag: bool = True
+    fail_fast: bool = False
     max_requests_per_second: float = 4.0
     job_id: str | None = None  # re-plan an existing job in place (e.g. after editing the mapping table)
 

@@ -703,6 +703,7 @@ export interface MigrationPlanRequest {
   mapping_overrides?: Record<string, MigrationMappingOverride>;
   conflict_policy?: Record<string, string>;
   marker_tag?: boolean;
+  fail_fast?: boolean;
   max_requests_per_second?: number;
   job_id?: string | null;
 }
@@ -729,12 +730,42 @@ export interface MigrationJobSummary {
   actor_name?: string | null;
 }
 
+export interface MigrationMappingSkeletonRow {
+  override_key: string;
+  object_type: string;
+  source_id: number;
+  source_natural_key: string;
+  auto_match: "matched" | "no_match" | "ambiguous";
+  target_id?: number | null;
+  match_detail?: string | null;
+  action?: "map" | "skip" | "create" | null;
+}
+
+export interface MigrationPreflightSide {
+  reachable: boolean;
+  token_valid: boolean;
+  netbox_version?: string | null;
+  detail?: string | null;
+  write_permission_checked?: boolean | null;
+  write_permission_ok?: boolean | null;
+}
+
+export interface MigrationPreflightResult {
+  source: MigrationPreflightSide;
+  target: MigrationPreflightSide;
+}
+
 export const migrationsApi = {
   types: () => request<MigrationType[]>("/migrations/types"),
   plan: (data: MigrationPlanRequest) =>
     request<MigrationJobSummary>("/migrations/plan", { method: "POST", body: JSON.stringify(data) }),
   jobs: () => request<MigrationJobSummary[]>("/migrations/jobs"),
   job: (id: string) => request<MigrationJobSummary>(`/migrations/jobs/${id}`),
+  mappingSkeleton: (id: string) => request<MigrationMappingSkeletonRow[]>(`/migrations/jobs/${id}/mapping-skeleton`),
+  preflight: (source_instance_id: string, target_instance_id: string) =>
+    request<MigrationPreflightResult>("/migrations/preflight", {
+      method: "POST", body: JSON.stringify({ source_instance_id, target_instance_id }),
+    }),
   execute: (id: string) =>
     request<MigrationJobSummary>(`/migrations/jobs/${id}/execute`, {
       method: "POST", body: JSON.stringify({ confirm: true }),

@@ -7,6 +7,7 @@ from app.services.migration.client import (
     ReadOnlyViolation,
     build_client,
 )
+from app.services.netbox_client import check_migration_version_compatibility
 
 BASE = "https://netbox.example"
 API = f"{BASE}/api"
@@ -124,3 +125,57 @@ def test_throttle_enforces_minimum_interval_between_requests():
     client.create(client.nb.dcim.sites, {"name": "B", "slug": "b"})
     assert client.stats.throttle_sleeps == 1
     assert slept and abs(slept[0] - 0.4) < 1e-9
+
+
+@responses.activate
+def test_migration_versions_same_major_minor_have_no_warning():
+    responses.get(f"{BASE}/source/api/status/", json={"netbox-version": "4.6.8"})
+    responses.get(f"{BASE}/target/api/status/", json={"netbox-version": "4.6.9"})
+    source, target, warnings = check_migration_version_compatibility(
+        f"{BASE}/source", "source-token", True, f"{BASE}/target", "target-token", True,
+    )
+    assert source["ok"] and target["ok"]
+    assert warnings == []
+
+
+@responses.activate
+def test_migration_versions_different_minor_warn():
+    responses.get(f"{BASE}/source/api/status/", json={"netbox-version": "4.6.8"})
+    responses.get(f"{BASE}/target/api/status/", json={"netbox-version": "4.7.0"})
+    _, _, warnings = check_migration_version_compatibility(
+        f"{BASE}/source", "source-token", True, f"{BASE}/target", "target-token", True,
+    )
+    assert len(warnings) == 1
+
+
+@responses.activate
+def test_migration_versions_different_major_raise():
+    responses.get(f"{BASE}/source/api/status/", json={"netbox-version": "4.6.8"})
+    responses.get(f"{BASE}/target/api/status/", json={"netbox-version": "5.0.0"})
+    with pytest.raises(RuntimeError, match="major versions"):
+        check_migration_version_compatibility(
+            f"{BASE}/source", "source-token", True, f"{BASE}/target", "target-token", True,
+        )
+
+
+@responses.activate
+def test_paginated_chunks_large_id_filters_and_deduplicates_results():
+    for result_id in (1, 101, 201):
+        responses.get(
+            f"{API}/dcim/sites/",
+            json={"count": 1, "next": None, "previous": None, "results": [{"id": result_id}]},
+        )
+    client = _client()
+    results = list(client.paginated(client.nb.dcim.sites, device_id=list(range(205))))
+    assert [result["id"] for result in results] == [1, 101, 201]
+    assert len(responses.calls) == 3
+    assert all(call.request.url.count("device_id=") == 100 for call in responses.calls[:2])
+    assert responses.calls[2].request.url.count("device_id=") == 5
+
+
+@responses.activate
+def test_create_many_requires_one_record_per_payload():
+    responses.post(f"{API}/dcim/sites/", json=[{"id": 1}, {"id": 2}], status=201)
+    client = _client()
+    records = client.create_many(client.nb.dcim.sites, [{"name": "A"}, {"name": "B"}])
+    assert [record.id for record in records] == [1, 2]

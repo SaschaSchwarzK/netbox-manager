@@ -10,6 +10,7 @@ from test_migration_planner import FakeClient  # noqa: E402
 
 from app import models  # noqa: E402
 from app.services.migration.executor import execute_job  # noqa: E402
+from app.services.migration.client import MigrationApiError  # noqa: E402
 from app.services.migration.planner import build_plan, persist_plan  # noqa: E402
 from app.services.migration.registry import load_registry  # noqa: E402
 
@@ -209,6 +210,52 @@ def test_genuine_api_error_is_recorded_per_item_and_does_not_abort_the_job(db):
     assert statuses["lon-1"] == "error"
 
 
+def test_fail_fast_stops_before_the_next_pending_item(db):
+    source = FakeClient({
+        "dcim.sites": [
+            {"id": 1, "slug": "ams-1"}, {"id": 2, "slug": "lon-1"}, {"id": 3, "slug": "par-1"},
+        ],
+    }, read_only=True)
+    target = FakeClient({})
+    plan = build_plan(registry=REGISTRY, source_client=source, target_client=target, selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={})
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    original_create = target.create
+
+    def fail_second(endpoint, payload):
+        if payload.get("slug") == "lon-1":
+            raise MigrationApiError("stop here")
+        return original_create(endpoint, payload)
+
+    target.create = fail_second
+    execute_job(db, job, registry=REGISTRY, target_client=target, fail_fast=True)
+    items = db.query(models.MigrationJobItem).filter_by(job_id=job.id).order_by(models.MigrationJobItem.order_index).all()
+    assert [item.execution_status for item in items] == ["done", "error", "pending"]
+    assert job.status == "completed_with_errors"
+    assert job.phase == "primary"
+
+
+def test_fail_fast_resume_processes_remaining_pending_items(db):
+    source = FakeClient({"dcim.sites": [{"id": 1, "slug": "ams-1"}, {"id": 2, "slug": "lon-1"}, {"id": 3, "slug": "par-1"}]}, read_only=True)
+    target = FakeClient({})
+    plan = build_plan(registry=REGISTRY, source_client=source, target_client=target, selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={})
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    original_create = target.create
+    target.create = lambda endpoint, payload: (_ for _ in ()).throw(MigrationApiError("stop")) if payload.get("slug") == "lon-1" else original_create(endpoint, payload)
+    execute_job(db, job, registry=REGISTRY, target_client=target, fail_fast=True)
+    target.create = original_create
+    db.query(models.MigrationJobItem).filter_by(job_id=job.id, execution_status="error").update(
+        {"execution_status": "pending", "error_detail": None}, synchronize_session=False,
+    )
+    job.status = "running"
+    db.commit()
+    db.refresh(job)
+    execute_job(db, job, registry=REGISTRY, target_client=target, fail_fast=True)
+    assert job.status == "completed"
+    assert len(target.data["dcim.sites"]) == 3
+
+
 def test_execute_job_is_a_noop_on_an_already_terminal_job(db):
     source = FakeClient({"dcim.sites": [{"id": 1, "slug": "ams-1"}]}, read_only=True)
     target = FakeClient({})
@@ -347,3 +394,205 @@ def test_ip_assigned_to_vminterface_not_selected_produces_patch_error(db):
     assert ip_patch.execution_status == "error"
     # Error must mention the vminterface type specifically
     assert "virtualization.vminterface" in ip_patch.error_detail
+
+
+def test_tags_are_resolved_to_target_ids_not_sent_as_raw_nested_objects(db):
+    source = FakeClient({
+        "extras.tags": [{"id": 1, "slug": "production", "name": "Production"}],
+        "dcim.sites": [{"id": 1, "slug": "ams-1", "name": "Amsterdam 1", "tags": [{"id": 1, "slug": "production", "name": "Production"}]}],
+    }, read_only=True)
+    target = FakeClient({})
+
+    plan = build_plan(registry=REGISTRY, source_client=source, target_client=target, selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={})
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+
+    db.refresh(job)
+    assert job.status == "completed"
+    created_tag = target.data["extras.tags"][0]
+    created_site = target.data["dcim.sites"][0]
+    # The site's tags field must be the TARGET tag's id, never the raw nested source object.
+    assert created_site["tags"] == [created_tag["id"]]
+    assert isinstance(created_site["tags"][0], int)
+
+
+def test_tags_reuse_an_existing_target_tag_by_slug_instead_of_duplicating(db):
+    source = FakeClient({
+        "extras.tags": [{"id": 1, "slug": "production", "name": "Production"}],
+        "dcim.sites": [{"id": 1, "slug": "ams-1", "name": "Amsterdam 1", "tags": [{"id": 1, "slug": "production"}]}],
+    }, read_only=True)
+    target = FakeClient({"extras.tags": [{"id": 500, "slug": "production", "name": "Production"}]})
+
+    plan = build_plan(registry=REGISTRY, source_client=source, target_client=target, selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={})
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+
+    db.refresh(job)
+    assert job.status == "completed"
+    assert len(target.data["extras.tags"]) == 1  # no duplicate tag created
+    created_site = target.data["dcim.sites"][0]
+    assert created_site["tags"] == [500]
+
+
+def test_interface_lag_is_patched_after_both_interfaces_exist(db):
+    source = FakeClient({
+        "dcim.manufacturers": [{"id": 1, "slug": "cisco"}],
+        "dcim.device_types": [{"id": 1, "manufacturer": {"id": 1}, "model": "C9300"}],
+        "dcim.device_roles": [{"id": 1, "slug": "access-switch"}],
+        "dcim.sites": [{"id": 1, "slug": "ams-1"}],
+        "dcim.devices": [{"id": 1, "name": "core-sw-1", "site": {"id": 1}, "device_type": {"id": 1}, "role": {"id": 1}}],
+        "dcim.interfaces": [
+            {"id": 10, "device": {"id": 1}, "name": "Port-channel1"},
+            {"id": 11, "device": {"id": 1}, "name": "Gi0/1", "lag": {"id": 10}},
+        ],
+    }, read_only=True)
+    target = FakeClient({})
+
+    plan = build_plan(registry=REGISTRY, source_client=source, target_client=target, selected_types={"dcim.device", "dcim.interface"}, tenant_filter=[], mapping_overrides={})
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+
+    db.refresh(job)
+    assert job.status == "completed"
+    interfaces = {i["name"]: i for i in target.data["dcim.interfaces"]}
+    assert interfaces["Gi0/1"]["lag"] == interfaces["Port-channel1"]["id"]
+
+
+def test_devicebay_installed_device_is_patched_after_both_devices_exist(db):
+    source = FakeClient({
+        "dcim.manufacturers": [{"id": 1, "slug": "cisco"}],
+        "dcim.device_types": [{"id": 1, "manufacturer": {"id": 1}, "model": "C9300"}],
+        "dcim.device_roles": [{"id": 1, "slug": "access-switch"}],
+        "dcim.sites": [{"id": 1, "slug": "ams-1"}],
+        "dcim.devices": [
+            {"id": 1, "name": "chassis-1", "site": {"id": 1}, "device_type": {"id": 1}, "role": {"id": 1}},
+            {"id": 2, "name": "blade-1", "site": {"id": 1}, "device_type": {"id": 1}, "role": {"id": 1}},
+        ],
+        "dcim.device_bays": [{"id": 20, "device": {"id": 1}, "name": "Bay 1", "installed_device": {"id": 2}}],
+    }, read_only=True)
+    target = FakeClient({})
+
+    plan = build_plan(registry=REGISTRY, source_client=source, target_client=target, selected_types={"dcim.device", "dcim.devicebay"}, tenant_filter=[], mapping_overrides={})
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+
+    db.refresh(job)
+    assert job.status == "completed"
+    bay = target.data["dcim.device_bays"][0]
+    blade = next(d for d in target.data["dcim.devices"] if d["name"] == "blade-1")
+    assert bay["installed_device"] == blade["id"]
+
+
+def test_marker_tag_applied_to_created_objects_not_mapped_ones(db):
+    source = FakeClient({
+        "dcim.sites": [
+            {"id": 1, "slug": "ams-1", "name": "Amsterdam 1"},   # will be mapped (exists on target)
+            {"id": 2, "slug": "lon-1", "name": "London 1"},      # will be created
+        ],
+    }, read_only=True)
+    target = FakeClient({"dcim.sites": [{"id": 100, "slug": "ams-1", "name": "Amsterdam 1"}]})
+    plan = build_plan(registry=REGISTRY, source_client=source, target_client=target, selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={})
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+
+    execute_job(db, job, registry=REGISTRY, target_client=target, marker_tag_slug="migrated-from-test")
+
+    db.refresh(job)
+    assert job.status == "completed"
+    tag = target.data["extras.tags"][0]
+    assert tag["slug"] == "migrated-from-test"
+    sites = {s["slug"]: s for s in target.data["dcim.sites"]}
+    assert sites["lon-1"]["tags"] == [tag["id"]]          # created object: tagged
+    assert sites["ams-1"].get("tags") in (None, [])       # mapped (pre-existing) object: untouched
+
+
+def test_marker_tag_reuses_existing_tag_and_is_idempotent_across_two_runs(db):
+    source = FakeClient({"dcim.sites": [{"id": 1, "slug": "lon-1", "name": "London 1"}]}, read_only=True)
+    target = FakeClient({"extras.tags": [{"id": 999, "slug": "migrated-from-test", "name": "migrated-from-test"}]})
+    plan = build_plan(registry=REGISTRY, source_client=source, target_client=target, selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={})
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+
+    execute_job(db, job, registry=REGISTRY, target_client=target, marker_tag_slug="migrated-from-test")
+    db.refresh(job)
+    assert job.status == "completed"
+    assert len(target.data["extras.tags"]) == 1  # reused, not duplicated
+    site = target.data["dcim.sites"][0]
+    assert site["tags"] == [999]
+
+    # Re-running marker tagging again (e.g. a resumed job re-doing this best-effort step) must
+    # not duplicate the tag on the object either.
+    from app.services.migration.executor import _apply_marker_tag
+    from app.services.migration.matcher import IdMap
+    id_map = IdMap()
+    id_map.put("dcim.site", 1, site["id"])
+    _apply_marker_tag(db, job, registry=REGISTRY, target_client=target, id_map=id_map, tag_slug="migrated-from-test")
+    assert target.data["dcim.sites"][0]["tags"] == [999]  # still just one entry, not [999, 999]
+
+
+def test_marker_tag_failure_is_recorded_as_a_warning_and_does_not_block_completion(db):
+    source = FakeClient({"dcim.sites": [{"id": 1, "slug": "lon-1", "name": "London 1"}]}, read_only=True)
+    target = FakeClient({})
+    plan = build_plan(registry=REGISTRY, source_client=source, target_client=target, selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={})
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+
+    def failing_create(endpoint, payload):
+        raise RuntimeError("target rejected tag creation")
+    original_create = target.create
+    target.create = lambda endpoint, payload: failing_create(endpoint, payload) if "tags" in endpoint.key else original_create(endpoint, payload)
+
+    execute_job(db, job, registry=REGISTRY, target_client=target, marker_tag_slug="migrated-from-test")
+
+    db.refresh(job)
+    assert job.status == "completed"  # marker tagging must never prevent a terminal status
+    assert any("Marker tagging failed" in w for w in __import__("json").loads(job.warnings_json))
+    assert len(target.data["dcim.sites"]) == 1  # the site itself still migrated fine
+
+
+def test_no_marker_tag_when_slug_is_none(db):
+    source = FakeClient({"dcim.sites": [{"id": 1, "slug": "lon-1", "name": "London 1"}]}, read_only=True)
+    target = FakeClient({})
+    plan = build_plan(registry=REGISTRY, source_client=source, target_client=target, selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={})
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+
+    execute_job(db, job, registry=REGISTRY, target_client=target, marker_tag_slug=None)
+
+    db.refresh(job)
+    assert job.status == "completed"
+    assert "extras.tags" not in target.data or not target.data["extras.tags"]
+
+
+def test_conflict_policy_update_actually_executes_the_update(db):
+    """
+    Regression test: the bulk-create batching refactor (_execute_create_batch)
+    routed "create" items to a new code path but left "update" items falling
+    through to _execute_one_item, which had its "update" branch deleted and
+    replaced with an unconditional `else: raise AssertionError(...)`. Any
+    conflict_policy="update" migration crashed the entire job the instant it
+    reached a matched-and-to-be-updated object. This must never regress again.
+    """
+    source = FakeClient({"dcim.sites": [{"id": 1, "slug": "ams-1", "name": "Amsterdam 1 RENAMED"}]}, read_only=True)
+    target = FakeClient({"dcim.sites": [{"id": 100, "slug": "ams-1", "name": "Amsterdam 1"}]})
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={},
+        conflict_policy={"dcim.site": "update"},
+    )
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+
+    execute_job(db, job, registry=REGISTRY, target_client=target)  # must NOT raise
+
+    db.refresh(job)
+    assert job.status == "completed"
+    item = db.query(models.MigrationJobItem).filter_by(job_id=job.id).one()
+    assert item.execution_status == "done"
+    assert item.target_id == 100  # the existing object, not a new one
+    updated_site = next(s for s in target.data["dcim.sites"] if s["id"] == 100)
+    assert updated_site["name"] == "Amsterdam 1 RENAMED"

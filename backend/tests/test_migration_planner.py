@@ -86,6 +86,9 @@ class FakeClient:
         self.created.append((endpoint.key, payload))
         return record
 
+    def create_many(self, endpoint: _FakeEndpoint, payloads: list[dict]):
+        return [self.create(endpoint, payload) for payload in payloads]
+
     def update_by_id(self, endpoint: _FakeEndpoint, id_: int, payload: dict):
         if self.read_only:
             raise AssertionError("must never write to a read-only client")
@@ -94,6 +97,21 @@ class FakeClient:
                 obj.update(payload)
                 return obj
         raise AssertionError(f"update_by_id: no object with id={id_} on {endpoint.key}")
+
+
+class OptionsFakeClient(FakeClient):
+    def options(self, endpoint):
+        return {"actions": {"POST": {"name": {"required": True}}}}
+
+
+def test_plan_warns_when_options_metadata_finds_missing_required_field():
+    source = FakeClient({"dcim.sites": [{"id": 1, "slug": "ams-1"}]}, read_only=True)
+    target = OptionsFakeClient({})
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={},
+    )
+    assert any("required field 'name'" in warning for warning in plan.warnings)
 
 
 def test_plan_maps_existing_site_by_slug_and_creates_new_one():

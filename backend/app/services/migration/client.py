@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import random
 import time
+from functools import partial
+from itertools import product
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
 
@@ -18,6 +20,9 @@ import pynetbox
 import requests
 
 from app.services.netbox_client import get_client
+
+
+FILTER_CHUNK_SIZE = 100
 
 
 class ReadOnlyViolation(RuntimeError):
@@ -86,6 +91,7 @@ class RateLimitedClient:
     _last_request_at: float | None = field(default=None, init=False, repr=False)
     _sleep: Callable[[float], None] = field(default=time.sleep, repr=False)
     _now: Callable[[], float] = field(default=time.monotonic, repr=False)
+    _options_cache: dict[str, dict[str, Any]] = field(default_factory=dict, init=False, repr=False)
 
     def _throttle(self) -> None:
         if self.max_requests_per_second <= 0:
@@ -149,6 +155,11 @@ class RateLimitedClient:
         self.stats.total_retry_sleep_seconds += delay
         self._sleep(delay)
 
+    def _fetch_page(self, url: str, params: dict[str, Any] | None, headers: dict[str, str]) -> requests.Response:
+        response = self.nb.http_session.get(url, headers=headers, params=params, timeout=30)
+        response.raise_for_status()
+        return response
+
     def paginated(self, endpoint, **filters) -> Iterator[dict[str, Any]]:
         """
         Pages through an endpoint's list view with retry applied per HTTP
@@ -169,25 +180,57 @@ class RateLimitedClient:
         dicts throughout the migration engine.
         """
         headers = {"accept": "application/json", "authorization": f"Token {self.nb.token}"}
-        url: str | None = endpoint.url if endpoint.url.endswith("/") else f"{endpoint.url}/"
-        params: dict[str, Any] | None = dict(filters)
-        while url:
-            request_url, request_params = url, params
+        list_filters = {
+            key: value for key, value in filters.items()
+            if key.endswith("_id") and isinstance(value, list) and len(value) > FILTER_CHUNK_SIZE
+        }
+        chunks = [
+            [values[index:index + FILTER_CHUNK_SIZE] for index in range(0, len(values), FILTER_CHUNK_SIZE)]
+            for values in list_filters.values()
+        ]
+        chunk_combinations = product(*chunks) if chunks else [()]
+        seen_ids: set[int] = set()
 
-            def fetch() -> requests.Response:
-                response = self.nb.http_session.get(request_url, headers=headers, params=request_params, timeout=30)
-                response.raise_for_status()
-                return response
+        for chunk_values in chunk_combinations:
+            chunk_filters = dict(filters)
+            for key, values in zip(list_filters, chunk_values):
+                chunk_filters[key] = values
+            url: str | None = endpoint.url if endpoint.url.endswith("/") else f"{endpoint.url}/"
+            params: dict[str, Any] | None = chunk_filters
+            while url:
+                request_url, request_params = url, params
 
-            response = self.call(fetch)
-            data = response.json()
-            yield from data.get("results", [])
-            url = data.get("next")
-            params = None  # `next` is already a fully-formed URL with its own query string
+                response = self.call(partial(self._fetch_page, request_url, request_params, headers))
+                data = response.json()
+                for result in data.get("results", []):
+                    result_id = result.get("id") if isinstance(result, dict) else None
+                    if isinstance(result_id, int) and result_id > 0:
+                        if result_id in seen_ids:
+                            continue
+                        seen_ids.add(result_id)
+                    yield result
+                url = data.get("next")
+                params = None  # `next` is already a fully-formed URL with its own query string
 
     def create(self, endpoint, payload: dict[str, Any]) -> Any:
         self._guard_write()
         return self.call(lambda: endpoint.create(payload))
+
+    def create_many(self, endpoint, payloads: list[dict[str, Any]]) -> list[Any]:
+        """Create one NetBox bulk payload and reject ambiguous response shapes."""
+        self._guard_write()
+        result = self.call(lambda: endpoint.create(payloads))
+        if isinstance(result, (str, bytes, dict)):
+            raise MigrationApiError("NetBox bulk create returned a non-list response")
+        try:
+            records = list(result)
+        except TypeError as exc:
+            raise MigrationApiError("NetBox bulk create returned a non-list response") from exc
+        if len(records) != len(payloads):
+            raise MigrationApiError(
+                f"NetBox bulk create returned {len(records)} records for {len(payloads)} payloads"
+            )
+        return records
 
     def update(self, record: Any, payload: dict[str, Any]) -> Any:
         self._guard_write()
@@ -203,6 +246,16 @@ class RateLimitedClient:
 
     def get(self, endpoint, **filters) -> Any:
         return self.call(lambda: endpoint.get(**filters))
+
+    def options(self, endpoint) -> dict[str, Any]:
+        """Return cached endpoint metadata used for plan-time field warnings."""
+        key = endpoint.url
+        if key not in self._options_cache:
+            response = self.call(lambda: self.nb.http_session.options(endpoint.url, timeout=30))
+            response.raise_for_status()
+            data = response.json()
+            self._options_cache[key] = data if isinstance(data, dict) else {}
+        return self._options_cache[key]
 
     def _guard_write(self) -> None:
         if self.read_only:

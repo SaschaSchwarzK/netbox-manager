@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  instancesApi, migrationsApi, MigrationJobSummary, MigrationType, NetboxInstance,
+  instancesApi, migrationsApi, MigrationJobSummary, MigrationMappingOverride,
+  MigrationMappingSkeletonRow, MigrationType, NetboxInstance, MigrationPreflightResult,
 } from "../api/client";
 
 function message(error: any) {
@@ -37,11 +38,21 @@ export default function MigrationPage() {
   const [tenantFilter, setTenantFilter] = useState("");
   const [includeUntenanted, setIncludeUntenanted] = useState(false);
   const [markerTag, setMarkerTag] = useState(true);
+  const [failFast, setFailFast] = useState(false);
   const [maxRps, setMaxRps] = useState(4);
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
   const [conflictDefault, setConflictDefault] = useState<"skip" | "update">("skip");
 
   const [job, setJob] = useState<MigrationJobSummary | null>(null);
+  const [skeleton, setSkeleton] = useState<MigrationMappingSkeletonRow[]>([]);
+  const [mappingOverrides, setMappingOverrides] = useState<Record<string, MigrationMappingOverride>>({});
+  const [mappingSearch, setMappingSearch] = useState("");
+  const [manualType, setManualType] = useState("");
+  const [manualSourceId, setManualSourceId] = useState("");
+  const [manualTargetId, setManualTargetId] = useState("");
+  const [manualAction, setManualAction] = useState<MigrationMappingOverride["action"]>("map");
+  const [preflight, setPreflight] = useState<MigrationPreflightResult | null>(null);
+  const [preflightBusy, setPreflightBusy] = useState(false);
   const [confirmRun, setConfirmRun] = useState(false);
   const [reportNonce, setReportNonce] = useState(0);
   const pollRef = useRef<number | null>(null);
@@ -85,10 +96,23 @@ export default function MigrationPage() {
   };
 
   const resetWizard = () => {
-    setJob(null); setConfirmRun(false); setNotice(null); setSelectedTypes(new Set());
+    setJob(null); setSkeleton([]); setMappingOverrides({}); setMappingSearch(""); setPreflight(null); setConfirmRun(false); setNotice(null); setSelectedTypes(new Set());
   };
 
-  const planMigration = async (reuseJobId?: string) => {
+  useEffect(() => {
+    if (!job) { setSkeleton([]); return; }
+    migrationsApi.mappingSkeleton(job.id).then(setSkeleton).catch((e) => setNotice({ kind: "error", text: message(e) }));
+  }, [job?.id]);
+
+  const runPreflight = async () => {
+    if (!sourceId || !targetId) return;
+    setPreflightBusy(true); setPreflight(null);
+    try { setPreflight(await migrationsApi.preflight(sourceId, targetId)); }
+    catch (e) { setNotice({ kind: "error", text: message(e) }); }
+    finally { setPreflightBusy(false); }
+  };
+
+  const planMigration = async (reuseJobId?: string, overrides = mappingOverrides) => {
     if (!sourceId || !targetId) { setNotice({ kind: "error", text: "Select a source and target instance." }); return; }
     if (sourceId === targetId) { setNotice({ kind: "error", text: "Source and target must be different instances." }); return; }
     if (!selectedTypes.size) { setNotice({ kind: "error", text: "Select at least one data type to migrate." }); return; }
@@ -99,7 +123,9 @@ export default function MigrationPage() {
         source_instance_id: sourceId, target_instance_id: targetId,
         selected_types: Array.from(selectedTypes), tenant_filter: tenants,
         include_untenanted: includeUntenanted, marker_tag: markerTag, max_requests_per_second: maxRps,
+        fail_fast: failFast,
         conflict_policy: { default: conflictDefault },
+        mapping_overrides: overrides,
         job_id: reuseJobId,
       });
       setJob(result); setReportNonce((n) => n + 1);
@@ -108,6 +134,37 @@ export default function MigrationPage() {
   };
 
   const ambiguousCount = job ? totalsFor(job, "ambiguous") : 0;
+
+  const typeGroups = types.reduce<Record<string, MigrationType[]>>((groups, type) => {
+    const namespace = type.type.split(".")[0].toUpperCase();
+    (groups[namespace] ??= []).push(type);
+    return groups;
+  }, {});
+
+  const visibleSkeleton = skeleton.filter((row) => {
+    const query = mappingSearch.trim().toLowerCase();
+    return !query || `${row.override_key} ${row.source_natural_key} ${row.auto_match}`.toLowerCase().includes(query);
+  });
+
+  const addManualMapping = () => {
+    const type = manualType.trim();
+    const sourceId = Number(manualSourceId);
+    const targetId = Number(manualTargetId);
+    if (!type || !Number.isInteger(sourceId) || sourceId <= 0) {
+      setNotice({ kind: "error", text: "Enter a valid object type and source ID." });
+      return;
+    }
+    if (manualAction === "map" && (!Number.isInteger(targetId) || targetId <= 0)) {
+      setNotice({ kind: "error", text: "A map action requires a valid target ID." });
+      return;
+    }
+    const next = {
+      ...mappingOverrides,
+      [`${type}:${sourceId}`]: { action: manualAction, target_id: manualAction === "map" ? targetId : null },
+    };
+    setMappingOverrides(next);
+    if (job) void planMigration(job.id, next);
+  };
 
   const runMigration = async () => {
     if (!job) return;
@@ -188,6 +245,18 @@ export default function MigrationPage() {
             </select>
           </div>
         </div>
+        <button onClick={runPreflight} disabled={preflightBusy || !sourceId || !targetId}>
+          {preflightBusy ? "Testing…" : "Test connection"}
+        </button>
+        {preflight && <div style={{ marginTop: 10 }}>
+          {(["source", "target"] as const).map((side) => {
+            const result = preflight[side];
+            return <div key={side}><span className={`status-dot ${result.token_valid ? "status-ok" : "status-error"}`} />
+              {side === "source" ? "Source" : "Target"}: {result.token_valid ? `NetBox ${result.netbox_version ?? "unknown"}` : result.detail ?? "Connection failed"}
+            </div>;
+          })}
+          <div className="field-help">Target write permission is not probed because no safe read-only permission check is available.</div>
+        </div>}
         <div className="form-row">
           <label>Tenant filter (comma-separated slugs, optional — leave blank to migrate all tenants)</label>
           <input value={tenantFilter} onChange={(e) => setTenantFilter(e.target.value)} placeholder="acme, globex" />
@@ -204,6 +273,9 @@ export default function MigrationPage() {
             <label>Max requests/sec (per instance)</label>
             <input type="number" min={0.5} step={0.5} value={maxRps} onChange={(e) => setMaxRps(Number(e.target.value))} />
           </div>
+          <div className="form-row">
+            <label><input type="checkbox" checked={failFast} onChange={(e) => setFailFast(e.target.checked)} style={{ width: "auto", marginRight: 6 }} />Stop on first API error</label>
+          </div>
         </div>
       </div>
 
@@ -212,12 +284,19 @@ export default function MigrationPage() {
         <p className="field-help" style={{ marginTop: -6, marginBottom: 12 }}>
           Required reference objects (sites, device types, manufacturers, …) are included automatically and don't need to be selected here.
         </p>
-        <div className="content-type-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", maxHeight: 280 }}>
-          {types.map((t) => (
-            <label key={t.type} title={t.dependencies.length ? `Requires: ${t.dependencies.join(", ")}` : undefined}>
-              <input type="checkbox" checked={selectedTypes.has(t.type)} onChange={() => toggleType(t.type)} />
-              {t.label}
-            </label>
+        <div className="migration-type-groups">
+          {Object.entries(typeGroups).map(([namespace, group]) => (
+            <section className="migration-type-group" key={namespace}>
+              <h3>{namespace}</h3>
+              <div className="content-type-grid">
+                {group.map((t) => (
+                  <label key={t.type} title={t.dependencies.length ? `Requires: ${t.dependencies.join(", ")}` : undefined}>
+                    <input type="checkbox" checked={selectedTypes.has(t.type)} onChange={() => toggleType(t.type)} />
+                    <span>{t.label}</span>
+                  </label>
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       </div>
@@ -273,6 +352,50 @@ export default function MigrationPage() {
             See the detailed report below for which objects and why.
           </p>
         )}
+      </div>
+
+      <div className="card">
+        <h2>Mapping review</h2>
+        <div className="mapping-toolbar">
+          <input value={mappingSearch} onChange={(e) => setMappingSearch(e.target.value)} placeholder="Search type, source ID, name or status" />
+          <span className="field-help">{visibleSkeleton.length} of {skeleton.length} planned objects</span>
+        </div>
+        {!skeleton.length && <p className="field-help">No planned objects are available for mapping review.</p>}
+        {!!visibleSkeleton.length && <table>
+          <thead><tr><th>Source</th><th>Auto-match</th><th>Action</th><th>Target ID</th></tr></thead>
+          <tbody>{visibleSkeleton.map((row) => {
+            const override = mappingOverrides[row.override_key];
+            return <tr key={row.override_key} style={row.auto_match === "ambiguous" ? { color: "var(--danger)" } : undefined}>
+              <td>{row.object_type} #{row.source_id} ({row.source_natural_key})<br /><small>{row.match_detail}</small></td>
+              <td>{row.auto_match}{row.target_id ? ` -> ${row.target_id}` : ""}</td>
+              <td><select value={override?.action ?? ""} onChange={(e) => {
+                const action = e.target.value as MigrationMappingOverride["action"];
+                const next = { ...mappingOverrides, [row.override_key]: { action, target_id: action === "map" ? (override?.target_id ?? row.target_id ?? null) : null } };
+                setMappingOverrides(next);
+                if (action !== "map" || next[row.override_key].target_id != null) void planMigration(job.id, next);
+              }}><option value="">Review…</option><option value="map">Map to existing</option><option value="skip">Skip</option><option value="create">Create new</option></select></td>
+              <td>{override?.action === "map" && <input type="number" value={override.target_id ?? ""} onChange={(e) => {
+                const target_id = Number(e.target.value) || null;
+                const next = { ...mappingOverrides, [row.override_key]: { ...override, target_id } };
+                setMappingOverrides(next);
+                if (target_id != null) void planMigration(job.id, next);
+              }} />}</td>
+            </tr>;
+          })}</tbody>
+        </table>}
+        {!!skeleton.length && !visibleSkeleton.length && <p className="field-help">No mapping rows match the search.</p>}
+        <div className="manual-mapping-editor">
+          <strong>Add manual mapping</strong>
+          <input value={manualType} onChange={(e) => setManualType(e.target.value)} placeholder="type.key" />
+          <input value={manualSourceId} onChange={(e) => setManualSourceId(e.target.value)} placeholder="Source ID" inputMode="numeric" />
+          <select value={manualAction} onChange={(e) => setManualAction(e.target.value as MigrationMappingOverride["action"])}>
+            <option value="map">Map to existing</option>
+            <option value="skip">Skip</option>
+            <option value="create">Create new</option>
+          </select>
+          {manualAction === "map" && <input value={manualTargetId} onChange={(e) => setManualTargetId(e.target.value)} placeholder="Target ID" inputMode="numeric" />}
+          <button disabled={busy} onClick={addManualMapping}>Add and re-plan</button>
+        </div>
       </div>
 
       <div className="card">

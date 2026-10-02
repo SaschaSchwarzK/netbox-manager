@@ -476,6 +476,18 @@ types:
     optional_dependencies: []
     field_map:
       device: dcim.device
+    # lag/bridge/parent are self-referential (one interface pointing at another, usually but
+    # not always on the same device). Unlike region/site-group/location's self_parent_field,
+    # these don't form a single clean depth-sortable hierarchy within one type — an interface
+    # can be a LAG member, a bridge member, AND a sub-interface's parent simultaneously, with
+    # no guaranteed single ordering across a device's whole interface set. Deferred (patch
+    # phase) instead: by the time patches run, every interface from phase `primary` already
+    # exists for real, so these always resolve then regardless of creation order within the
+    # type.
+    deferred_field_map:
+      lag: dcim.interface
+      bridge: dcim.interface
+      parent: dcim.interface
     tenant_relation: "device__tenant"
     tenant_filterable: false
     match_strategies:
@@ -574,6 +586,11 @@ types:
     optional_dependencies: []
     field_map:
       device: dcim.device
+    # installed_device is circular in the same way dcim.device.primary_ip4 is: a device bay's
+    # installed_device is itself a dcim.device, and that device's own bay (if any) could point
+    # back the other way. Always deferred to the patch phase, never resolved inline.
+    deferred_field_map:
+      installed_device: dcim.device
     tenant_relation: "device__tenant"
     tenant_filterable: false
     match_strategies:
@@ -787,6 +804,25 @@ types:
     out_of_scope: true
     out_of_scope_reason: "Cable terminations reference arbitrary endpoint types (GenericForeignKey); deferred to a later phase."
     match_strategies: []
+
+  # Not part of any type's `dependencies`/`optional_dependencies` and deliberately absent
+  # from field_map everywhere — `tags` is handled as an implicit, universal field on every
+  # type instead (see registry.py's UNIVERSAL_TAG_FIELD/UNIVERSAL_TAG_TYPE and
+  # TypeSpec.all_field_map). build_plan() always processes this type first, regardless of
+  # what the user selected, exactly like it would need to if it were a real dependency of
+  # everything — which, in effect, it is.
+  extras.tag:
+    endpoint: "extras.tags"
+    ui_path: "extras/tags"
+    selectable: false
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
 
   extras.customfield:
     endpoint: "extras.custom_fields"

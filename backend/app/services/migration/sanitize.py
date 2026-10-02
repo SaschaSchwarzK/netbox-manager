@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.services.migration.matcher import IdMap
-from app.services.migration.registry import TypeSpec
+from app.services.migration.registry import UNIVERSAL_TAG_FIELD, UNIVERSAL_TAG_TYPE, TypeSpec
 
 # Present on every NetBox object's representation; never sent back on create/update.
 _ALWAYS_STRIP = {
@@ -60,6 +60,22 @@ def _choice_value(value: Any) -> Any:
     """NetBox choice fields serialize as {"value": ..., "label": ...}; the API wants just the value back."""
     if isinstance(value, dict) and "value" in value and "label" in value:
         return value["value"]
+    return value
+
+
+def _unwrap_fk_value(value: Any) -> Any:
+    """Return a scalar id or list of ids from a single nested object/list-like FK reference."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value.get("id") if "id" in value else value
+    if isinstance(value, (list, tuple, set)):
+        items = []
+        for item in value:
+            item_value = _unwrap_fk_value(item)
+            if item_value is not None:
+                items.append(item_value)
+        return items
     return value
 
 
@@ -88,6 +104,8 @@ def extract_fields(type_spec: TypeSpec, source_obj: dict[str, Any]) -> Extracted
     polymorphic_fk_refs: dict[str, dict[str, Any]] = {}
     dropped_custom_fields: list[str] = []
 
+    self_parent_field = type_spec.self_parent_field
+
     for key, value in source_obj.items():
         if key in _ALWAYS_STRIP:
             continue
@@ -95,35 +113,64 @@ def extract_fields(type_spec: TypeSpec, source_obj: dict[str, Any]) -> Extracted
             if value:
                 dropped_custom_fields.append(key)
             continue
+        if key == self_parent_field:
+            if value is None:
+                static_fields[key] = None  # same as any optional FK, never a resolution problem
+            else:
+                fk_refs[key] = _unwrap_fk_value(value)
+            continue
+        if key == UNIVERSAL_TAG_FIELD and type_spec.key != UNIVERSAL_TAG_TYPE:
+            # `tags` is a list of nested tag objects on read; NetBox's write API wants a list
+            # of tag ids/slugs, not nested objects — without this, every migrated object with
+            # any tag would send the raw nested dicts straight through as static_fields and
+            # fail (or write garbage) on create. Resolved like any other FK list: through
+            # fk_refs, against the always-pre-populated extras.tag id map (see planner.py,
+            # which processes tags before every other type regardless of what's selected).
+            fk_refs[key] = _unwrap_fk_value(value) if value else []
+            continue
         if key in type_spec.deferred_field_map:
             if value is not None:
-                deferred_fk_refs[key] = value["id"] if isinstance(value, dict) else value
+                deferred_fk_refs[key] = _unwrap_fk_value(value)
             continue
         if key in type_spec.polymorphic_field_map:
             if value is not None:
                 poly_spec = type_spec.polymorphic_field_map[key]
                 disc_value = source_obj.get(poly_spec.discriminator_field)
                 dep_type_key = poly_spec.type_values.get(disc_value) if disc_value else None
-                source_fk_id = value["id"] if isinstance(value, dict) else value
+                source_fk_id = _unwrap_fk_value(value)
                 polymorphic_fk_refs[key] = {"type": dep_type_key, "id": source_fk_id}
             continue
         if key in type_spec.field_map:
             if value is None:
                 static_fields[key] = None  # a genuinely absent optional FK — not a resolution problem
             else:
-                fk_refs[key] = value["id"] if isinstance(value, dict) else value
+                fk_refs[key] = _unwrap_fk_value(value)
             continue
         static_fields[key] = _choice_value(value)
 
     return ExtractedFields(static_fields, fk_refs, deferred_fk_refs, polymorphic_fk_refs, dropped_custom_fields)
 
 
+def _resolve_ref_value(source_value: Any, dep_type_key: str | None, *, id_map: IdMap) -> Any:
+    if isinstance(source_value, list):
+        resolved_values: list[Any] = []
+        for item in source_value:
+            target_value = id_map.get(dep_type_key, item) if dep_type_key is not None else None
+            if target_value is None:
+                return None
+            resolved_values.append(target_value)
+        return resolved_values
+    if dep_type_key is None:
+        return None
+    return id_map.get(dep_type_key, source_value)
+
+
 def resolve_fk_refs(
     type_spec: TypeSpec,
-    fk_refs: dict[str, int],
+    fk_refs: dict[str, Any],
     *,
     id_map: IdMap,
-) -> tuple[dict[str, Any], dict[str, int]]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """
     Resolves a {field_name: source_fk_id} map (either `fk_refs` or
     `deferred_fk_refs` from extract_fields) against `id_map` as it stands
@@ -135,10 +182,12 @@ def resolve_fk_refs(
     """
     fk_field_types = type_spec.all_field_map  # {field_name: dependency_type_key}
     resolved: dict[str, Any] = {}
-    unresolved: dict[str, int] = {}
+    unresolved: dict[str, Any] = {}
     for field_name, source_fk_id in fk_refs.items():
         dep_type_key = fk_field_types.get(field_name)
-        target_fk_id = id_map.get(dep_type_key, source_fk_id) if dep_type_key else None
+        if dep_type_key is None and field_name == type_spec.self_parent_field:
+            dep_type_key = type_spec.key
+        target_fk_id = _resolve_ref_value(source_fk_id, dep_type_key, id_map=id_map)
         if target_fk_id is not None:
             resolved[field_name] = target_fk_id
         else:
