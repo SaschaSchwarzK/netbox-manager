@@ -146,7 +146,7 @@ def resume_orphaned_migration_jobs():
     import threading
 
     from app import models
-    from app.routers.migrations import _run_in_background
+    from app.routers.migrations import _run_in_background, _run_rollback_in_background
 
     db = SessionLocal()
     try:
@@ -156,6 +156,10 @@ def resume_orphaned_migration_jobs():
             max_rps = options.get("max_requests_per_second", 4.0)
             logger.warning("Resuming orphaned migration job %s (found status=running at startup).", job.id)
             threading.Thread(target=_run_in_background, args=(job.id, max_rps), daemon=True).start()
+        orphaned_rollbacks = db.query(models.MigrationJob).filter(models.MigrationJob.status == "rolling_back").all()
+        for job in orphaned_rollbacks:
+            logger.warning("Resuming orphaned migration rollback %s at startup.", job.id)
+            threading.Thread(target=_run_rollback_in_background, args=(job.id,), daemon=True).start()
     finally:
         db.close()
 

@@ -163,7 +163,11 @@ def _resolve_strategy(
         if raw_value is None:
             return None
         if field_name in strategy.fk_fields:
-            dep_type_key = _dependency_type_for_field(type_spec, field_name)
+            poly_spec = type_spec.polymorphic_field_map.get(field_name)
+            dep_type_key = (
+                poly_spec.type_values.get(source_obj.get(poly_spec.discriminator_field))
+                if poly_spec else _dependency_type_for_field(type_spec, field_name)
+            )
             if dep_type_key is None:
                 return None
             source_fk_id = raw_value["id"] if isinstance(raw_value, dict) else raw_value
@@ -173,7 +177,7 @@ def _resolve_strategy(
             # NetBox's REST filtering convention for a numeric FK lookup is
             # `<field>_id=<id>` — plain `<field>=<value>` instead filters by
             # that related object's slug/name, which target_fk_id is not.
-            resolved[f"{field_name}_id"] = target_fk_id
+            resolved[field_name if field_name.endswith("_id") else f"{field_name}_id"] = target_fk_id
         else:
             resolved[field_name] = raw_value
     return resolved

@@ -590,6 +590,15 @@ class MigrationExecuteRequest(BaseModel):
     confirm: bool = False
 
 
+class MigrationRollbackResponse(BaseModel):
+    job: MigrationJobSummary
+    detail: str
+    deleted: int
+    failed: int
+    untouched_mapped: int
+    untouched_updated: int
+
+
 class RestoreCustomFieldsRequest(BaseModel):
     instance_id: str
     backup: dict[str, Any]

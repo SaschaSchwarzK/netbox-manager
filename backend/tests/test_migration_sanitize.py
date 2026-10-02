@@ -168,10 +168,12 @@ def test_extract_fields_polymorphic_device_interface_routes_to_dcim_interface():
     source_obj = {
         "address": "10.0.0.1/24",
         "assigned_object_type": "dcim.interface",
+        "assigned_object_id": 10,
         "assigned_object": {"id": 10},
     }
     extracted = extract_fields(REGISTRY["ipam.ipaddress"], source_obj)
-    assert extracted.polymorphic_fk_refs == {"assigned_object": {"type": "dcim.interface", "id": 10}}
+    assert extracted.polymorphic_fk_refs == {"assigned_object_id": {"type": "dcim.interface", "id": 10}}
+    assert "assigned_object" not in extracted.static_fields
     assert "assigned_object" not in extracted.fk_refs
     assert "assigned_object" not in extracted.static_fields
 
@@ -180,10 +182,10 @@ def test_extract_fields_polymorphic_vm_interface_routes_to_vminterface():
     source_obj = {
         "address": "10.0.0.2/24",
         "assigned_object_type": "virtualization.vminterface",
-        "assigned_object": {"id": 20},
+        "assigned_object_id": 20,
     }
     extracted = extract_fields(REGISTRY["ipam.ipaddress"], source_obj)
-    assert extracted.polymorphic_fk_refs == {"assigned_object": {"type": "virtualization.vminterface", "id": 20}}
+    assert extracted.polymorphic_fk_refs == {"assigned_object_id": {"type": "virtualization.vminterface", "id": 20}}
     assert "assigned_object" not in extracted.fk_refs
 
 
@@ -193,11 +195,11 @@ def test_extract_fields_polymorphic_unknown_discriminator_stores_none_type():
     source_obj = {
         "address": "10.0.0.3/24",
         "assigned_object_type": "circuits.circuittermination",
-        "assigned_object": {"id": 30},
+        "assigned_object_id": 30,
     }
     extracted = extract_fields(REGISTRY["ipam.ipaddress"], source_obj)
-    assert extracted.polymorphic_fk_refs["assigned_object"]["type"] is None
-    assert extracted.polymorphic_fk_refs["assigned_object"]["id"] == 30
+    assert extracted.polymorphic_fk_refs["assigned_object_id"]["type"] is None
+    assert extracted.polymorphic_fk_refs["assigned_object_id"]["id"] == 30
 
 
 def test_resolve_polymorphic_fk_refs_resolves_dcim_interface():

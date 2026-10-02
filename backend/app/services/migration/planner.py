@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Any
+import re
 
 from app.services.migration.client import RateLimitedClient
 from app.services.migration.matcher import (
@@ -95,7 +96,7 @@ class LiveTargetLookup:
         self._cache: dict[tuple[str, tuple], dict | None] = {}
 
     def find(self, type_spec: TypeSpec, scalar_filters: dict[str, Any]) -> dict[str, Any] | None:
-        cache_key = (type_spec.key, tuple(sorted(scalar_filters.items())))
+        cache_key = (type_spec.key, tuple(sorted((key, _freeze(value)) for key, value in scalar_filters.items())))
         if cache_key in self._cache:
             return self._cache[cache_key]
         endpoint = resolve_endpoint(self.target_client.nb, type_spec.endpoint)
@@ -106,6 +107,15 @@ class LiveTargetLookup:
 
     def clear_cache(self) -> None:
         self._cache.clear()
+
+
+def _freeze(value: Any) -> Any:
+    """Make list/dict filter values hashable for the target lookup cache."""
+    if isinstance(value, dict):
+        return tuple(sorted((key, _freeze(item)) for key, item in value.items()))
+    if isinstance(value, (list, tuple, set)):
+        return tuple(_freeze(item) for item in value)
+    return value
 
 
 def resolve_endpoint(nb: Any, dotted: str) -> Any:
@@ -201,11 +211,20 @@ def build_plan(
     mapping_overrides: dict[tuple[str, int], MappingOverride],
     conflict_policy: dict[str, str] | None = None,
     include_untenanted: bool = False,
+    source_netbox_version: str | None = None,
 ) -> PlanResult:
     if not source_client.read_only:
         raise ValueError("build_plan requires a read-only source client")
 
     resolved_types = resolve_selection(selected_types, registry)
+    source_version = _parse_version(source_netbox_version)
+    skipped_for_version = {
+        type_key for type_key in resolved_types
+        if registry[type_key].min_netbox_version is not None
+        and source_version is not None
+        and source_version < registry[type_key].min_netbox_version
+    }
+    resolved_types = [type_key for type_key in resolved_types if type_key not in skipped_for_version]
     if UNIVERSAL_TAG_TYPE in registry and UNIVERSAL_TAG_TYPE not in resolved_types:
         # `tags` is deliberately not a declared dependency of anything (see registry.py's
         # UNIVERSAL_TAG_FIELD) — it's universal rather than type-specific, so it can't be
@@ -218,6 +237,11 @@ def build_plan(
     placeholders = _PlaceholderIds()
     target_lookup = LiveTargetLookup(target_client)
     result = PlanResult(resolved_types=resolved_types)
+    for type_key in sorted(skipped_for_version):
+        required = ".".join(map(str, registry[type_key].min_netbox_version))
+        result.warnings.append(
+            f"{type_key} was skipped because source NetBox {source_netbox_version} is older than required {required}."
+        )
     conflict_policy = conflict_policy or {}
     # Every type's source object ids, as they're processed — used to scope
     # a dependent, non-tenant-filterable child type (interfaces, VM disks,
@@ -266,6 +290,11 @@ def build_plan(
         result.totals[type_key] = type_totals
 
     return result
+
+
+def _parse_version(value: str | None) -> tuple[int, int, int] | None:
+    match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?", value or "")
+    return tuple(int(part or 0) for part in match.groups()) if match else None
 
 
 def _plan_one_object(

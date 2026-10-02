@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import {
   instancesApi, migrationsApi, MigrationJobSummary, MigrationMappingOverride,
-  MigrationMappingSkeletonRow, MigrationType, NetboxInstance, MigrationPreflightResult,
+  MigrationMappingSkeletonRow, MigrationTenant, MigrationType, NetboxInstance, MigrationPreflightResult,
 } from "../api/client";
+
+type ConflictPolicy = "skip" | "update" | "update_empty_only";
 
 function message(error: any) {
   const text = error?.message ?? "Request failed";
@@ -12,7 +14,10 @@ function message(error: any) {
   } catch { return text; }
 }
 
-const TERMINAL: MigrationJobSummary["status"][] = ["completed", "completed_with_errors", "failed", "cancelled"];
+const TERMINAL: MigrationJobSummary["status"][] = [
+  "completed", "completed_with_errors", "failed", "cancelled", "rolled_back", "rolled_back_with_errors",
+];
+const ROLLBACK_ELIGIBLE: MigrationJobSummary["status"][] = ["completed", "completed_with_errors", "failed", "cancelled"];
 
 function totalsFor(job: MigrationJobSummary, action: string): number {
   return Object.values(job.totals).reduce((sum, row) => sum + (row[action] ?? 0), 0);
@@ -21,7 +26,9 @@ function totalsFor(job: MigrationJobSummary, action: string): number {
 function statusColor(status: MigrationJobSummary["status"]) {
   if (status === "completed") return "var(--success)";
   if (status === "completed_with_errors" || status === "failed") return "var(--danger)";
-  if (status === "running") return "var(--accent)";
+  if (status === "rolled_back_with_errors") return "var(--danger)";
+  if (status === "rolled_back") return "var(--success)";
+  if (status === "running" || status === "rolling_back") return "var(--accent)";
   return "var(--muted)";
 }
 
@@ -35,13 +42,16 @@ export default function MigrationPage() {
 
   const [sourceId, setSourceId] = useState("");
   const [targetId, setTargetId] = useState("");
-  const [tenantFilter, setTenantFilter] = useState("");
+  const [tenantFilter, setTenantFilter] = useState<string[]>([]);
+  const [tenants, setTenants] = useState<MigrationTenant[]>([]);
+  const [tenantsBusy, setTenantsBusy] = useState(false);
   const [includeUntenanted, setIncludeUntenanted] = useState(false);
   const [markerTag, setMarkerTag] = useState(true);
   const [failFast, setFailFast] = useState(false);
   const [maxRps, setMaxRps] = useState(4);
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
-  const [conflictDefault, setConflictDefault] = useState<"skip" | "update">("skip");
+  const [conflictDefault, setConflictDefault] = useState<ConflictPolicy>("skip");
+  const [conflictOverrides, setConflictOverrides] = useState<Record<string, ConflictPolicy>>({});
 
   const [job, setJob] = useState<MigrationJobSummary | null>(null);
   const [skeleton, setSkeleton] = useState<MigrationMappingSkeletonRow[]>([]);
@@ -56,6 +66,7 @@ export default function MigrationPage() {
   const [confirmRun, setConfirmRun] = useState(false);
   const [reportNonce, setReportNonce] = useState(0);
   const pollRef = useRef<number | null>(null);
+  const tenantCacheRef = useRef<Record<string, MigrationTenant[]>>({});
 
   useEffect(() => {
     instancesApi.list().then((rows) => {
@@ -68,6 +79,22 @@ export default function MigrationPage() {
 
   const loadJobs = () => migrationsApi.jobs().then(setJobs).catch((e) => setNotice({ kind: "error", text: message(e) }));
   useEffect(() => { if (tab === "history") loadJobs(); }, [tab]);
+
+  useEffect(() => {
+    setTenantFilter([]);
+    if (!sourceId) { setTenants([]); return; }
+    const cached = tenantCacheRef.current[sourceId];
+    if (cached) { setTenants(cached); return; }
+    let active = true;
+    setTenantsBusy(true);
+    migrationsApi.tenants(sourceId).then((rows) => {
+      tenantCacheRef.current[sourceId] = rows;
+      if (active) setTenants(rows);
+    }).catch((e) => {
+      if (active) { setTenants([]); setNotice({ kind: "error", text: message(e) }); }
+    }).finally(() => { if (active) setTenantsBusy(false); });
+    return () => { active = false; };
+  }, [sourceId]);
 
   // Poll the active job while it's running, and bump reportNonce so the embedded report
   // iframe reloads and shows live per-object progress (execution_status is read fresh from
@@ -96,7 +123,7 @@ export default function MigrationPage() {
   };
 
   const resetWizard = () => {
-    setJob(null); setSkeleton([]); setMappingOverrides({}); setMappingSearch(""); setPreflight(null); setConfirmRun(false); setNotice(null); setSelectedTypes(new Set());
+    setJob(null); setSkeleton([]); setMappingOverrides({}); setMappingSearch(""); setPreflight(null); setConfirmRun(false); setNotice(null); setSelectedTypes(new Set()); setConflictOverrides({});
   };
 
   useEffect(() => {
@@ -118,13 +145,17 @@ export default function MigrationPage() {
     if (!selectedTypes.size) { setNotice({ kind: "error", text: "Select at least one data type to migrate." }); return; }
     setBusy(true); setNotice(null);
     try {
-      const tenants = tenantFilter.split(",").map((t) => t.trim()).filter(Boolean);
+      const conflict_policy: Record<string, string> = { default: conflictDefault };
+      selectedTypes.forEach((type) => {
+        const override = conflictOverrides[type];
+        if (override && override !== conflictDefault) conflict_policy[type] = override;
+      });
       const result = await migrationsApi.plan({
         source_instance_id: sourceId, target_instance_id: targetId,
-        selected_types: Array.from(selectedTypes), tenant_filter: tenants,
+        selected_types: Array.from(selectedTypes), tenant_filter: tenantFilter,
         include_untenanted: includeUntenanted, marker_tag: markerTag, max_requests_per_second: maxRps,
         fail_fast: failFast,
-        conflict_policy: { default: conflictDefault },
+        conflict_policy,
         mapping_overrides: overrides,
         job_id: reuseJobId,
       });
@@ -186,6 +217,23 @@ export default function MigrationPage() {
     setBusy(true);
     try { setJob(await migrationsApi.retryFailed(job.id)); setReportNonce((n) => n + 1); }
     catch (e) { setNotice({ kind: "error", text: message(e) }); }
+    finally { setBusy(false); }
+  };
+
+  const rollbackMigration = async () => {
+    if (!job || !confirm(
+      "Delete every object successfully created by this migration?\n\n" +
+      "This is best-effort only. Mapped and updated objects will NOT be restored or changed, patches on surviving objects will remain, and the marker tag definition will be retained."
+    )) return;
+    setBusy(true); setNotice(null);
+    try {
+      const result = await migrationsApi.rollback(job.id);
+      setJob(result.job); setReportNonce((n) => n + 1);
+      setNotice({
+        kind: result.failed ? "warning" : "ok",
+        text: `${result.detail} Deleted ${result.deleted}; failed ${result.failed}; untouched mapped ${result.untouched_mapped}; untouched updated ${result.untouched_updated}.`,
+      });
+    } catch (e) { setNotice({ kind: "error", text: message(e) }); }
     finally { setBusy(false); }
   };
 
@@ -258,8 +306,12 @@ export default function MigrationPage() {
           <div className="field-help">Target write permission is not probed because no safe read-only permission check is available.</div>
         </div>}
         <div className="form-row">
-          <label>Tenant filter (comma-separated slugs, optional — leave blank to migrate all tenants)</label>
-          <input value={tenantFilter} onChange={(e) => setTenantFilter(e.target.value)} placeholder="acme, globex" />
+          <label>Tenant filter (optional — leave empty to migrate all tenants)</label>
+          <select multiple size={Math.min(Math.max(tenants.length, 3), 7)} value={tenantFilter} disabled={tenantsBusy}
+            onChange={(e) => setTenantFilter(Array.from(e.target.selectedOptions, (option) => option.value))}>
+            {tenants.map((tenant) => <option key={tenant.id} value={tenant.slug}>{tenant.name} — {tenant.slug}</option>)}
+          </select>
+          <div className="field-help">{tenantsBusy ? "Loading source tenants…" : `${tenants.length} source tenant(s) available. Hold Ctrl/Cmd to select multiple.`}</div>
           <div className="field-help">Devices, VMs, IPAM data, and their components are scoped to these tenants. Reference objects (sites, device types, …) are only included if actually referenced.</div>
         </div>
         <div className="field-row-3col">
@@ -289,12 +341,28 @@ export default function MigrationPage() {
             <section className="migration-type-group" key={namespace}>
               <h3>{namespace}</h3>
               <div className="content-type-grid">
-                {group.map((t) => (
-                  <label key={t.type} title={t.dependencies.length ? `Requires: ${t.dependencies.join(", ")}` : undefined}>
-                    <input type="checkbox" checked={selectedTypes.has(t.type)} onChange={() => toggleType(t.type)} />
-                    <span>{t.label}</span>
-                  </label>
-                ))}
+                {group.map((t) => {
+                  const selected = selectedTypes.has(t.type);
+                  return <div className="migration-type-option" key={t.type} title={t.dependencies.length ? `Requires: ${t.dependencies.join(", ")}` : undefined}>
+                    <label>
+                      <input type="checkbox" checked={selected} onChange={() => toggleType(t.type)} />
+                      <span>{t.label}</span>
+                    </label>
+                    {selected && <select aria-label={`${t.label} conflict policy override`}
+                      value={conflictOverrides[t.type] ?? ""}
+                      onChange={(e) => setConflictOverrides((previous) => {
+                        const next = { ...previous };
+                        const value = e.target.value as ConflictPolicy | "";
+                        if (value) next[t.type] = value; else delete next[t.type];
+                        return next;
+                      })}>
+                      <option value="">Use global default</option>
+                      <option value="skip">Leave unchanged</option>
+                      <option value="update">Update from source</option>
+                      <option value="update_empty_only">Update empty fields only</option>
+                    </select>}
+                  </div>;
+                })}
               </div>
             </section>
           ))}
@@ -305,9 +373,10 @@ export default function MigrationPage() {
         <h2>3. Conflict policy</h2>
         <div className="form-row">
           <label>When an object already exists on the target (matched by name/slug/etc.)</label>
-          <select value={conflictDefault} onChange={(e) => setConflictDefault(e.target.value as any)}>
+          <select value={conflictDefault} onChange={(e) => setConflictDefault(e.target.value as ConflictPolicy)}>
             <option value="skip">Leave it unchanged (map only)</option>
             <option value="update">Update it from the source</option>
+            <option value="update_empty_only">Update empty fields only</option>
           </select>
           <div className="field-help">Objects you explicitly map yourself are never changed, regardless of this setting.</div>
         </div>
@@ -324,7 +393,7 @@ export default function MigrationPage() {
       <div className="card">
         <h2>Plan summary</h2>
         <table>
-          <thead><tr><th>Type</th><th>Create</th><th>Update</th><th>Map</th><th>Skip</th><th>Ambiguous</th></tr></thead>
+          <thead><tr><th>Type</th><th>Create</th><th>Update</th><th>Map</th><th>Skip</th><th>Ambiguous</th><th>Errors</th><th>Rolled back</th><th>Rollback errors</th></tr></thead>
           <tbody>
             {Object.entries(job.totals).map(([type, counts]) => (
               <tr key={type}>
@@ -334,10 +403,14 @@ export default function MigrationPage() {
                 <td>{counts.map ?? 0}</td>
                 <td>{counts.skip ?? 0}</td>
                 <td style={{ color: counts.ambiguous ? "var(--danger)" : undefined }}>{counts.ambiguous ?? 0}</td>
+                <td style={{ color: counts.error ? "var(--danger)" : undefined }}>{counts.error ?? 0}</td>
+                <td>{counts.rolled_back ?? 0}</td>
+                <td style={{ color: counts.rollback_error ? "var(--danger)" : undefined }}>{counts.rollback_error ?? 0}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        {job.status !== "planned" && <div className="field-help" style={{ marginTop: 8 }}>Counts update as objects finish; pending objects are not included.</div>}
         {job.warnings.length > 0 && (
           <div style={{ marginTop: 14 }}>
             <div className="modal-section-title">Warnings ({job.warnings.length})</div>
@@ -422,14 +495,17 @@ export default function MigrationPage() {
           </div>
         </>}
 
-        {job.status === "running" && <div className="toolbar">
-          <span className="pill">Status: running ({job.phase} phase)</span>
+        {(job.status === "running" || job.status === "rolling_back") && <div className="toolbar">
+          <span className="pill">Status: {job.status}{job.status === "running" ? ` (${job.phase} phase)` : ""}</span>
+          {job.status === "running" &&
           <button className="danger" onClick={cancelMigration}>Cancel</button>
+          }
         </div>}
 
         {TERMINAL.includes(job.status) && <div className="toolbar">
           <span className="pill" style={{ color: statusColor(job.status) }}>Status: {job.status}</span>
           {job.status === "completed_with_errors" && <button disabled={busy} onClick={retryFailed}>Retry failed objects</button>}
+          {ROLLBACK_ELIGIBLE.includes(job.status) && <button className="danger" disabled={busy} onClick={rollbackMigration}>Rollback created objects</button>}
           <button onClick={resetWizard}>Start a new migration</button>
         </div>}
       </div>

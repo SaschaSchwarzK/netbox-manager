@@ -13,6 +13,7 @@ import time
 
 import pytest
 import responses
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -68,6 +69,34 @@ def _admin_ctx():
 
 def _empty_list(url):
     responses.get(url, json={"count": 0, "next": None, "previous": None, "results": []})
+
+
+@responses.activate
+def test_list_instance_tenants_uses_read_only_paginated_migration_client(db, instances):
+    source, _ = instances
+    responses.get(
+        f"{API_SRC}/tenancy/tenants/",
+        json={
+            "count": 2,
+            "next": f"{API_SRC}/tenancy/tenants/?limit=50&offset=1",
+            "previous": None,
+            "results": [{"id": 1, "name": "Acme", "slug": "acme"}],
+        },
+    )
+    responses.get(
+        f"{API_SRC}/tenancy/tenants/?limit=50&offset=1",
+        json={
+            "count": 2, "next": None, "previous": None,
+            "results": [{"id": 2, "name": "Globex", "slug": "globex"}],
+        },
+    )
+
+    rows = migrations.list_instance_tenants(source.id, q="", db=db, ctx=_admin_ctx())
+
+    assert rows == [
+        {"id": 1, "name": "Acme", "slug": "acme"},
+        {"id": 2, "name": "Globex", "slug": "globex"},
+    ]
 
 
 def _mock_netbox_apis():
@@ -159,6 +188,35 @@ def test_full_plan_execute_report_cycle_through_the_router(db, instances):
 
     report_json = migrations.get_report(job.id, format="json", db=db, _=_admin_ctx())
     assert report_json["status"] == "completed"
+
+
+@pytest.mark.parametrize("status", ["planned", "running"])
+def test_rollback_rejects_nonterminal_job(status, db, instances):
+    source, target = instances
+    job = models.MigrationJob(source_instance_id=source.id, target_instance_id=target.id, status=status)
+    db.add(job); db.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        migrations.rollback_migration(
+            job.id, schemas.MigrationExecuteRequest(confirm=True), db=db, ctx=_admin_ctx(),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "only after execution has stopped" in exc_info.value.detail
+
+
+def test_rollback_requires_target_instance_admin(db, instances):
+    source, target = instances
+    job = models.MigrationJob(source_instance_id=source.id, target_instance_id=target.id, status="completed")
+    db.add(job); db.commit()
+    editor = AccessContext(role="editor", groups=[], scoping_active=False, app_admin=False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        migrations.rollback_migration(
+            job.id, schemas.MigrationExecuteRequest(confirm=True), db=db, ctx=editor,
+        )
+
+    assert exc_info.value.status_code == 403
 
 
 class _FakeRequest:

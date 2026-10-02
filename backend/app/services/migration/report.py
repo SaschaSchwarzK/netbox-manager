@@ -41,6 +41,10 @@ _DISPLAY_NAMES = {
     "virtualization.virtualdisk": "Virtual Disks", "ipam.aggregate": "Aggregates", "ipam.prefix": "Prefixes",
     "ipam.iprange": "IP Ranges", "ipam.ipaddress": "IP Addresses", "ipam.vlan": "VLANs",
     "ipam.asn": "ASNs", "ipam.fhrpgroup": "FHRP Groups",
+    "ipam.fhrpgroupassignment": "FHRP Group Assignments", "ipam.service": "Services",
+    "dcim.macaddress": "MAC Addresses", "extras.configtemplate": "Config Templates",
+    "ipam.vlantranslationpolicy": "VLAN Translation Policies",
+    "ipam.vlantranslationrule": "VLAN Translation Rules", "ipam.asnrange": "ASN Ranges",
 }
 
 _ACTION_LABELS = {

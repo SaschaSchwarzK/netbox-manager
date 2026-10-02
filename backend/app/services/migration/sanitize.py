@@ -105,6 +105,13 @@ def extract_fields(type_spec: TypeSpec, source_obj: dict[str, Any]) -> Extracted
     dropped_custom_fields: list[str] = []
 
     self_parent_field = type_spec.self_parent_field
+    polymorphic_read_fields: set[str] = set()
+    for field_name in type_spec.polymorphic_field_map:
+        if field_name.endswith("_id"):
+            base = field_name[:-3]
+            polymorphic_read_fields.add(base)
+            if base.endswith("_object"):
+                polymorphic_read_fields.add(base[:-7])
 
     for key, value in source_obj.items():
         if key in _ALWAYS_STRIP:
@@ -112,6 +119,12 @@ def extract_fields(type_spec: TypeSpec, source_obj: dict[str, Any]) -> Extracted
         if key in _ALWAYS_DROP:
             if value:
                 dropped_custom_fields.append(key)
+            continue
+        if key in type_spec.intentionally_unconverted_fields:
+            continue
+        if key in polymorphic_read_fields:
+            # Nested GFK representations are read-only. The sibling writable
+            # ``*_id`` field below is what must be resolved and patched.
             continue
         if key == self_parent_field:
             if value is None:

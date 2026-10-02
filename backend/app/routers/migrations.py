@@ -14,7 +14,7 @@ import json
 import re
 import threading
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from app import crypto, models, schemas
@@ -28,6 +28,7 @@ from app.services.migration.matcher import MappingAction, MappingOverride
 from app.services.migration.mapping_skeleton import build_mapping_skeleton
 from app.services.migration.planner import build_plan, persist_plan
 from app.services.migration.report import build_report, render_html, render_json
+from app.services.migration.rollback import rollback_job
 from app.services.netbox_client import check_migration_version_compatibility, test_connection
 
 router = APIRouter(prefix="/api/migrations", tags=["migrations"])
@@ -106,6 +107,30 @@ def list_types(_: AccessContext = Depends(require_role("viewer"))):
     ]
 
 
+@router.get("/instances/{instance_id}/tenants")
+def list_instance_tenants(
+    instance_id: str,
+    q: str = Query(default="", max_length=100),
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("viewer")),
+):
+    """Return tenants from a migration source using the read-only, paginated client."""
+    require_visible("instance", instance_id, ctx, db)
+    instance = _get_instance_or_404(db, instance_id)
+    client = build_client(
+        instance.base_url, crypto.decrypt(instance.api_token_encrypted), instance.verify_ssl,
+        read_only=True,
+    )
+    filters = {"q": q.strip()} if q.strip() else {}
+    try:
+        return [
+            {"id": int(row["id"]), "name": str(row["name"]), "slug": str(row["slug"])}
+            for row in client.paginated(client.nb.tenancy.tenants, **filters)
+        ]
+    except Exception as exc:  # noqa: BLE001 - surface the source API failure as a gateway error
+        raise HTTPException(502, f"Could not load tenants from the source instance: {exc}") from exc
+
+
 @router.post("/plan", response_model=schemas.MigrationJobSummary)
 def plan_migration(
     payload: schemas.MigrationPlanRequest, request: Request,
@@ -124,7 +149,7 @@ def plan_migration(
     source_instance = _get_instance_or_404(db, payload.source_instance_id)
     target_instance = _get_instance_or_404(db, payload.target_instance_id)
     try:
-        _, _, version_warnings = check_migration_version_compatibility(
+        source_version_result, _, version_warnings = check_migration_version_compatibility(
             source_instance.base_url, crypto.decrypt(source_instance.api_token_encrypted), source_instance.verify_ssl,
             target_instance.base_url, crypto.decrypt(target_instance.api_token_encrypted), target_instance.verify_ssl,
         )
@@ -142,6 +167,7 @@ def plan_migration(
             selected_types=set(payload.selected_types), tenant_filter=payload.tenant_filter,
             mapping_overrides=mapping_overrides, conflict_policy=payload.conflict_policy,
             include_untenanted=payload.include_untenanted,
+            source_netbox_version=source_version_result.get("netbox_version"),
         )
     except registry_mod.MigrationRegistryError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -314,11 +340,15 @@ def execute_migration(
     job.status = "running"
     db.commit()
 
+    # Build the response before the background session starts mutating the
+    # same job. Besides giving callers a deterministic "running" response,
+    # this avoids concurrent access to one SQLite connection in tests.
+    db.refresh(job)
+    summary = _job_summary(db, job)
+
     thread = threading.Thread(target=_run_in_background, args=(job_id, max_rps), daemon=True)
     thread.start()
-
-    db.refresh(job)
-    return _job_summary(db, job)
+    return summary
 
 
 def job_ambiguous_count(db: Session, job_id: str) -> int:
@@ -374,6 +404,82 @@ def retry_failed(
 
     db.refresh(job)
     return _job_summary(db, job)
+
+
+@router.post("/jobs/{job_id}/rollback", response_model=schemas.MigrationRollbackResponse)
+def rollback_migration(
+    job_id: str, payload: schemas.MigrationExecuteRequest,
+    db: Session = Depends(get_db), ctx: AccessContext = Depends(require_role("editor")),
+):
+    job = db.get(models.MigrationJob, job_id)
+    if job is None:
+        raise HTTPException(404, "Migration job not found.")
+    require_resource_admin(ctx, "instance", job.target_instance_id, db)
+    allowed = {"completed", "completed_with_errors", "cancelled", "failed", "rolling_back"}
+    if job.status not in allowed:
+        raise HTTPException(
+            409,
+            f"Job is in status={job.status!r}; rollback is allowed only after execution has stopped.",
+        )
+    if not payload.confirm:
+        raise HTTPException(400, "Set confirm=true to delete objects created by this migration.")
+
+    target_instance = _get_instance_or_404(db, job.target_instance_id)
+    options = json.loads(job.options_json or "{}")
+    target_client = build_client(
+        target_instance.base_url, crypto.decrypt(target_instance.api_token_encrypted),
+        target_instance.verify_ssl, read_only=False,
+        max_requests_per_second=options.get("max_requests_per_second", 4.0),
+    )
+    rollback_job(db, job, registry=registry_mod.load_registry(), target_client=target_client)
+    db.refresh(job)
+
+    deleted = db.query(models.MigrationJobItem).filter_by(
+        job_id=job.id, planned_action="create", execution_status="rolled_back",
+    ).count()
+    failed = db.query(models.MigrationJobItem).filter_by(
+        job_id=job.id, planned_action="create", execution_status="rollback_error",
+    ).count()
+    untouched_mapped = db.query(models.MigrationJobItem).filter_by(
+        job_id=job.id, planned_action="map",
+    ).count()
+    untouched_updated = db.query(models.MigrationJobItem).filter_by(
+        job_id=job.id, planned_action="update",
+    ).count()
+    return schemas.MigrationRollbackResponse(
+        job=_job_summary(db, job),
+        detail=(
+            "Best-effort rollback deleted only objects created by this job. "
+            "Mapped and updated objects were not touched because their prior state was not recorded; "
+            "patches on surviving objects were also left unchanged. The marker tag definition was retained."
+        ),
+        deleted=deleted,
+        failed=failed,
+        untouched_mapped=untouched_mapped,
+        untouched_updated=untouched_updated,
+    )
+
+
+def _run_rollback_in_background(job_id: str) -> None:
+    """Resume an orphaned rollback after process restart."""
+    db = SessionLocal()
+    try:
+        job = db.get(models.MigrationJob, job_id)
+        if job is None or job.status != "rolling_back":
+            return
+        target_instance = db.get(models.NetboxInstance, job.target_instance_id)
+        options = json.loads(job.options_json or "{}")
+        target_client = build_client(
+            target_instance.base_url, crypto.decrypt(target_instance.api_token_encrypted),
+            target_instance.verify_ssl, read_only=False,
+            max_requests_per_second=options.get("max_requests_per_second", 4.0),
+        )
+        rollback_job(db, job, registry=registry_mod.load_registry(), target_client=target_client)
+    except Exception:  # noqa: BLE001 - keep rolling_back so the next restart can resume again
+        import logging
+        logging.getLogger(__name__).exception("Migration rollback %s failed unexpectedly", job_id)
+    finally:
+        db.close()
 
 
 @router.get("/jobs/{job_id}/report")

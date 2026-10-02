@@ -87,6 +87,8 @@ class TypeSpec:
     tenant_relation: str | None
     tenant_filterable: bool
     match_strategies: tuple[MatchStrategy, ...]
+    intentionally_unconverted_fields: tuple[str, ...] = ()
+    min_netbox_version: tuple[int, int, int] | None = None
     out_of_scope: bool = False
     out_of_scope_reason: str | None = None
     self_parent_field: str | None = None
@@ -206,6 +208,12 @@ def _parse_type(key: str, raw: Any) -> TypeSpec:
     tenant_relation = raw.get("tenant_relation")
     if tenant_relation is not None and not isinstance(tenant_relation, str):
         raise MigrationRegistryError(f"{key}.tenant_relation must be a string or null")
+    min_netbox_version = _parse_min_netbox_version(key, raw.get("min_netbox_version"))
+    intentionally_unconverted_fields = raw.get("intentionally_unconverted_fields", [])
+    if not isinstance(intentionally_unconverted_fields, list) or not all(
+        isinstance(value, str) and value for value in intentionally_unconverted_fields
+    ):
+        raise MigrationRegistryError(f"{key}.intentionally_unconverted_fields must be a list of non-empty strings")
 
     field_map = raw.get("field_map", {})
     if not isinstance(field_map, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in field_map.items()):
@@ -237,7 +245,7 @@ def _parse_type(key: str, raw: Any) -> TypeSpec:
         raise MigrationRegistryError(f"{key}: fields {sorted(poly_overlap)} appear in both polymorphic_field_map and field_map/deferred_field_map")
 
     match_strategies = _parse_match_strategies(key, raw.get("match_strategies"))
-    all_fk_field_names = set(field_map) | set(deferred_field_map)
+    all_fk_field_names = set(field_map) | set(deferred_field_map) | set(polymorphic_field_map)
     if self_parent_field:
         all_fk_field_names.add(self_parent_field)
     for strategy in match_strategies:
@@ -258,13 +266,27 @@ def _parse_type(key: str, raw: Any) -> TypeSpec:
         field_map=field_map,
         deferred_field_map=deferred_field_map,
         polymorphic_field_map=polymorphic_field_map,
+        intentionally_unconverted_fields=tuple(intentionally_unconverted_fields),
         tenant_relation=tenant_relation,
         tenant_filterable=bool(raw.get("tenant_filterable", False)),
         match_strategies=match_strategies,
+        min_netbox_version=min_netbox_version,
         out_of_scope=bool(raw.get("out_of_scope", False)),
         out_of_scope_reason=raw.get("out_of_scope_reason"),
         self_parent_field=self_parent_field,
     )
+
+
+def _parse_min_netbox_version(key: str, raw: Any) -> tuple[int, int, int] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise MigrationRegistryError(f"{key}.min_netbox_version must be a version string")
+    parts = raw.split(".")
+    if len(parts) not in (2, 3) or not all(part.isdigit() for part in parts):
+        raise MigrationRegistryError(f"{key}.min_netbox_version must look like '4.2' or '4.2.0'")
+    values = [int(part) for part in parts]
+    return tuple(values + [0] * (3 - len(values)))
 
 
 def _parse_polymorphic_field_map(

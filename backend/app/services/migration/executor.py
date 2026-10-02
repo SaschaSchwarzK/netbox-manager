@@ -69,6 +69,33 @@ def _check_cancelled(db: Session, job: MigrationJob, counter: int) -> None:
             raise JobCancelled()
 
 
+def _refresh_live_totals(db: Session, job: MigrationJob) -> None:
+    """Replace plan-time predictions with execution counts derived from durable rows."""
+    totals: dict[str, dict[str, int]] = {}
+    errored_patches = set(db.execute(
+        select(MigrationJobPatch.object_type, MigrationJobPatch.source_id)
+        .where(MigrationJobPatch.job_id == job.id, MigrationJobPatch.execution_status == "error")
+    ).all())
+    items = db.execute(
+        select(
+            MigrationJobItem.object_type, MigrationJobItem.source_id,
+            MigrationJobItem.planned_action, MigrationJobItem.execution_status,
+        )
+        .where(MigrationJobItem.job_id == job.id)
+    ).all()
+    for object_type, source_id, planned_action, execution_status in items:
+        counts = totals.setdefault(object_type, {})
+        if execution_status == "error" or (object_type, source_id) in errored_patches:
+            key = "error"
+        elif execution_status == "done":
+            key = planned_action
+        else:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    job.totals_json = json.dumps(totals)
+    db.commit()
+
+
 def _execute_one_item(
     db: Session,
     item: MigrationJobItem,
@@ -263,6 +290,7 @@ def _execute_pending_items(
             .limit(1)
         ).scalar_one_or_none()
         if item is None:
+            _refresh_live_totals(db, job)
             return
         counter += 1
         _check_cancelled(db, job, counter)
@@ -287,7 +315,9 @@ def _execute_pending_items(
                 db, contiguous, registry=registry, target_client=target_client,
                 target_lookup=target_lookup, id_map=id_map, fail_fast=fail_fast,
             ):
+                _refresh_live_totals(db, job)
                 return
+            _refresh_live_totals(db, job)
             continue
         try:
             _execute_one_item(db, item, registry=registry, target_client=target_client, target_lookup=target_lookup, id_map=id_map)
@@ -297,7 +327,9 @@ def _execute_pending_items(
             item.executed_at = datetime.utcnow()
             db.commit()
             if fail_fast:
+                _refresh_live_totals(db, job)
                 return
+        _refresh_live_totals(db, job)
 
 
 def _execute_pending_patches(
@@ -318,6 +350,7 @@ def _execute_pending_patches(
             .limit(1)
         ).scalar_one_or_none()
         if patch is None:
+            _refresh_live_totals(db, job)
             return
         counter += 1
         _check_cancelled(db, job, counter)
@@ -329,19 +362,8 @@ def _execute_pending_patches(
         resolved, unresolved = resolve_fk_refs(type_spec, patch_fields, id_map=id_map)
         poly_resolved, poly_errors = resolve_polymorphic_fk_refs(polymorphic_patch_fields, id_map=id_map)
 
-        all_errors = {**{k: f"unresolved: {v}" for k, v in unresolved.items()}, **poly_errors}
-        if all_errors:
-            patch.execution_status = "error"
-            patch.error_detail = (
-                f"Dependency never resolved (skipped or ambiguous?): {sorted(unresolved)}"
-                if unresolved else
-                f"Polymorphic FK could not be resolved: { {k: v for k, v in poly_errors.items()} }"
-            )
-            patch.executed_at = datetime.utcnow()
-            db.commit()
-            continue
-
         merged = {**resolved, **poly_resolved}
+        all_errors = {**{k: f"unresolved: {v}" for k, v in unresolved.items()}, **poly_errors}
 
         target_id = id_map.get(patch.object_type, patch.source_id)
         if target_id is None or target_id < 0:
@@ -351,17 +373,24 @@ def _execute_pending_patches(
             patch.error_detail = "The object this patch applies to was never created on the target."
             patch.executed_at = datetime.utcnow()
             db.commit()
+            _refresh_live_totals(db, job)
             continue
 
         try:
             endpoint = resolve_endpoint(target_client.nb, type_spec.endpoint)
-            target_client.update_by_id(endpoint, target_id, merged)
-            patch.execution_status = "done"
+            if merged:
+                target_client.update_by_id(endpoint, target_id, merged)
+            if all_errors:
+                patch.execution_status = "error"
+                patch.error_detail = f"Some deferred fields could not be resolved: {all_errors}"
+            else:
+                patch.execution_status = "done"
         except MigrationApiError as exc:
             patch.execution_status = "error"
             patch.error_detail = str(exc)
         patch.executed_at = datetime.utcnow()
         db.commit()
+        _refresh_live_totals(db, job)
         if fail_fast and patch.execution_status == "error":
             return
 
@@ -451,6 +480,7 @@ def execute_job(
     if job.started_at is None:
         job.started_at = datetime.utcnow()
     db.commit()
+    _refresh_live_totals(db, job)
 
     id_map = _load_id_map(db, job.id)
 
@@ -496,6 +526,7 @@ def execute_job(
                         job.warnings_json = json.dumps(warnings)
                         db.commit()
     except JobCancelled:
+        _refresh_live_totals(db, job)
         job.status = "cancelled"
         job.finished_at = datetime.utcnow()
         db.commit()
@@ -508,6 +539,7 @@ def execute_job(
         select(MigrationJobPatch.id).where(MigrationJobPatch.job_id == job.id, MigrationJobPatch.execution_status == "error").limit(1)
     ).first() is not None
 
+    _refresh_live_totals(db, job)
     job.status = "completed_with_errors" if any_errors else "completed"
     job.finished_at = datetime.utcnow()
     db.commit()

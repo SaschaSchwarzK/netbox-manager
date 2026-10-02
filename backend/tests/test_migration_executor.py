@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from app.services.migration.executor import execute_job  # noqa: E402
 from app.services.migration.client import MigrationApiError  # noqa: E402
 from app.services.migration.planner import build_plan, persist_plan  # noqa: E402
 from app.services.migration.registry import load_registry  # noqa: E402
+from app.services.migration.rollback import rollback_job  # noqa: E402
 
 REGISTRY = load_registry()
 
@@ -88,7 +90,7 @@ def test_deferred_fk_is_applied_via_patch_phase(db):
             "primary_ip4": {"id": 55},
         }],
         "dcim.interfaces": [{"id": 10, "device": {"id": 1}, "name": "mgmt0"}],
-        "ipam.ip_addresses": [{"id": 55, "address": "10.0.0.1/24", "assigned_object_type": "dcim.interface", "assigned_object": {"id": 10}}],
+        "ipam.ip_addresses": [{"id": 55, "address": "10.0.0.1/24", "assigned_object_type": "dcim.interface", "assigned_object_id": 10, "assigned_object": {"id": 10}}],
     }, read_only=True)
     target = FakeClient({})
 
@@ -105,6 +107,96 @@ def test_deferred_fk_is_applied_via_patch_phase(db):
     device = target.data["dcim.devices"][0]
     ip = target.data["ipam.ip_addresses"][0]
     assert device["primary_ip4"] == ip["id"]  # patched in after both existed
+
+
+def test_virtualchassis_master_is_patched_after_both_chassis_and_device_exist(db):
+    source = FakeClient({
+        "dcim.manufacturers": [{"id": 1, "slug": "acme"}],
+        "dcim.device_types": [{"id": 2, "manufacturer": {"id": 1}, "model": "R1"}],
+        "dcim.device_roles": [{"id": 3, "slug": "router"}],
+        "dcim.sites": [{"id": 4, "slug": "ams"}],
+        "dcim.virtual_chassis": [{"id": 5, "name": "stack-1", "master": {"id": 6}}],
+        "dcim.devices": [{
+            "id": 6, "name": "r1", "site": {"id": 4}, "device_type": {"id": 2},
+            "role": {"id": 3}, "virtual_chassis": {"id": 5}, "vc_position": 1,
+        }],
+    }, read_only=True)
+    target = FakeClient({})
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"dcim.device", "dcim.virtualchassis"}, tenant_filter=[], mapping_overrides={},
+    )
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+
+    chassis = target.data["dcim.virtual_chassis"][0]
+    device = target.data["dcim.devices"][0]
+    assert device["virtual_chassis"] == chassis["id"]
+    assert chassis["master"] == device["id"]
+
+
+def test_device_with_both_primary_ip4_and_primary_ip6_deferred_resolves_independently(db):
+    source = FakeClient({
+        "dcim.manufacturers": [{"id": 1, "slug": "acme"}],
+        "dcim.device_types": [{"id": 2, "manufacturer": {"id": 1}, "model": "R1"}],
+        "dcim.device_roles": [{"id": 3, "slug": "router"}],
+        "dcim.sites": [{"id": 4, "slug": "ams"}],
+        "dcim.devices": [{
+            "id": 5, "name": "r1", "site": {"id": 4}, "device_type": {"id": 2}, "role": {"id": 3},
+            "primary_ip4": {"id": 20}, "primary_ip6": {"id": 21},
+        }],
+        "dcim.interfaces": [
+            {"id": 10, "device": {"id": 5}, "name": "eth0"},
+            {"id": 11, "device": {"id": 5}, "name": "eth1"},
+        ],
+        "ipam.ip_addresses": [
+            {"id": 20, "address": "192.0.2.1/24", "assigned_object_type": "dcim.interface", "assigned_object_id": 10},
+            {"id": 21, "address": "2001:db8::1/64", "assigned_object_type": "dcim.interface", "assigned_object_id": 11},
+        ],
+    }, read_only=True)
+    target = FakeClient({})
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"dcim.device", "dcim.interface", "ipam.ipaddress"}, tenant_filter=[], mapping_overrides={},
+    )
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+
+    device = target.data["dcim.devices"][0]
+    ips = {row["address"]: row["id"] for row in target.data["ipam.ip_addresses"]}
+    assert device["primary_ip4"] == ips["192.0.2.1/24"]
+    assert device["primary_ip6"] == ips["2001:db8::1/64"]
+
+
+def test_device_primary_ip4_patch_failure_does_not_block_primary_ip6_patch(db):
+    source = FakeClient({
+        "dcim.manufacturers": [{"id": 1, "slug": "acme"}],
+        "dcim.device_types": [{"id": 2, "manufacturer": {"id": 1}, "model": "R1"}],
+        "dcim.device_roles": [{"id": 3, "slug": "router"}],
+        "dcim.sites": [{"id": 4, "slug": "ams"}],
+        "dcim.devices": [{
+            "id": 5, "name": "r1", "site": {"id": 4}, "device_type": {"id": 2}, "role": {"id": 3},
+            "primary_ip4": {"id": 20}, "primary_ip6": {"id": 21},
+        }],
+        "ipam.ip_addresses": [{"id": 21, "address": "2001:db8::1/64"}],
+    }, read_only=True)
+    target = FakeClient({})
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"dcim.device", "ipam.ipaddress"}, tenant_filter=[], mapping_overrides={},
+    )
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+
+    device = target.data["dcim.devices"][0]
+    assert "primary_ip4" not in device
+    assert device["primary_ip6"] == target.data["ipam.ip_addresses"][0]["id"]
+    patch = db.query(models.MigrationJobPatch).filter_by(job_id=job.id, object_type="dcim.device").one()
+    assert patch.execution_status == "error"
+    assert "primary_ip4" in patch.error_detail
 
 
 def test_crash_mid_run_then_resume_produces_no_duplicates(db):
@@ -208,6 +300,7 @@ def test_genuine_api_error_is_recorded_per_item_and_does_not_abort_the_job(db):
     statuses = {i.source_natural_key: i.execution_status for i in items}
     assert statuses["ams-1"] == "done"
     assert statuses["lon-1"] == "error"
+    assert json.loads(job.totals_json)["dcim.site"] == {"create": 1, "error": 1}
 
 
 def test_fail_fast_stops_before_the_next_pending_item(db):
@@ -311,6 +404,7 @@ def test_ip_assigned_to_device_interface_resolves_via_patch_phase(db):
         "ipam.ip_addresses": [{
             "id": 55, "address": "10.0.0.1/24",
             "assigned_object_type": "dcim.interface",
+            "assigned_object_id": 10,
             "assigned_object": {"id": 10},
         }],
     }, read_only=True)
@@ -330,7 +424,7 @@ def test_ip_assigned_to_device_interface_resolves_via_patch_phase(db):
     iface = target.data["dcim.interfaces"][0]
     ip = target.data["ipam.ip_addresses"][0]
     # The IP's assigned_object must point at the newly-created target interface
-    assert ip["assigned_object"] == iface["id"]
+    assert ip["assigned_object_id"] == iface["id"]
 
 
 def test_ip_assigned_to_vm_interface_resolves_via_patch_phase(db):
@@ -342,7 +436,7 @@ def test_ip_assigned_to_vm_interface_resolves_via_patch_phase(db):
         "ipam.ip_addresses": [{
             "id": 66, "address": "192.168.1.1/24",
             "assigned_object_type": "virtualization.vminterface",
-            "assigned_object": {"id": 20},
+            "assigned_object_id": 20,
         }],
     }, read_only=True)
     target = FakeClient({})
@@ -360,7 +454,7 @@ def test_ip_assigned_to_vm_interface_resolves_via_patch_phase(db):
     assert job.status == "completed"
     vmif = target.data["virtualization.interfaces"][0]
     ip = target.data["ipam.ip_addresses"][0]
-    assert ip["assigned_object"] == vmif["id"]
+    assert ip["assigned_object_id"] == vmif["id"]
 
 
 def test_ip_assigned_to_vminterface_not_selected_produces_patch_error(db):
@@ -371,7 +465,7 @@ def test_ip_assigned_to_vminterface_not_selected_produces_patch_error(db):
         "ipam.ip_addresses": [{
             "id": 66, "address": "192.168.1.1/24",
             "assigned_object_type": "virtualization.vminterface",
-            "assigned_object": {"id": 20},
+            "assigned_object_id": 20,
         }],
     }, read_only=True)
     target = FakeClient({})
@@ -394,6 +488,161 @@ def test_ip_assigned_to_vminterface_not_selected_produces_patch_error(db):
     assert ip_patch.execution_status == "error"
     # Error must mention the vminterface type specifically
     assert "virtualization.vminterface" in ip_patch.error_detail
+
+
+def test_executor_creates_all_new_types_and_resolves_polymorphic_fields(db):
+    source = FakeClient({
+        "extras.config_templates": [{"id": 70, "name": "router", "template_code": "hostname {{ device.name }}"}],
+        "dcim.manufacturers": [{"id": 1, "slug": "acme"}],
+        "dcim.device_types": [{"id": 2, "manufacturer": {"id": 1}, "model": "R1"}],
+        "dcim.device_roles": [{"id": 3, "slug": "router"}],
+        "dcim.sites": [{"id": 4, "slug": "ams"}],
+        "dcim.devices": [{
+            "id": 5, "name": "r1", "site": {"id": 4}, "device_type": {"id": 2},
+            "role": {"id": 3}, "config_template": {"id": 70},
+        }],
+        "ipam.vlan_translation_policies": [{"id": 80, "name": "edge"}],
+        "ipam.vlan_translation_rules": [{"id": 81, "policy": {"id": 80}, "local_vid": 100, "remote_vid": 200}],
+        "dcim.interfaces": [{
+            "id": 6, "device": {"id": 5}, "name": "eth0",
+            "vlan_translation_policy": {"id": 80},
+        }],
+        "ipam.fhrp_groups": [{"id": 7, "protocol": "vrrp2", "group_id": 10}],
+        "ipam.fhrp_group_assignments": [{
+            "id": 8, "group": {"id": 7}, "interface_type": "dcim.interface",
+            "interface_id": 6, "interface": {"id": 6}, "priority": 100,
+        }],
+        "ipam.services": [{
+            "id": 9, "parent_object_type": "ipam.fhrpgroup", "parent_object_id": 7,
+            "parent": {"id": 7}, "name": "dns", "protocol": "udp", "ports": [53],
+        }],
+        "dcim.mac_addresses": [{
+            "id": 10, "mac_address": "00:11:22:33:44:55",
+            "assigned_object_type": "dcim.interface", "assigned_object_id": 6,
+            "assigned_object": {"id": 6},
+        }],
+        "ipam.rirs": [{"id": 11, "slug": "arin", "name": "ARIN"}],
+        "ipam.asn_ranges": [{
+            "id": 12, "name": "private", "slug": "private", "rir": {"id": 11},
+            "start": 64512, "end": 65534,
+        }],
+    }, read_only=True)
+    target = FakeClient({})
+    selected = {
+        "extras.configtemplate", "ipam.vlantranslationpolicy", "ipam.vlantranslationrule",
+        "ipam.fhrpgroupassignment", "ipam.service", "dcim.macaddress", "ipam.asnrange",
+    }
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types=selected, tenant_filter=[], mapping_overrides={}, source_netbox_version="4.6.8",
+    )
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+
+    db.refresh(job)
+    assert job.status == "completed"
+    expected_endpoints = {
+        "extras.config_templates", "ipam.vlan_translation_policies", "ipam.vlan_translation_rules",
+        "ipam.fhrp_group_assignments", "ipam.services", "dcim.mac_addresses", "ipam.asn_ranges",
+    }
+    assert expected_endpoints <= set(target.data)
+    interface_id = target.data["dcim.interfaces"][0]["id"]
+    group_id = target.data["ipam.fhrp_groups"][0]["id"]
+    assert target.data["ipam.fhrp_group_assignments"][0]["interface_id"] == interface_id
+    assert target.data["ipam.services"][0]["parent_object_id"] == group_id
+    assert target.data["dcim.mac_addresses"][0]["assigned_object_id"] == interface_id
+
+
+def _executed_site_device_interface_job(db):
+    source = FakeClient({
+        "dcim.manufacturers": [{"id": 1, "slug": "acme"}],
+        "dcim.device_types": [{"id": 2, "manufacturer": {"id": 1}, "model": "R1"}],
+        "dcim.device_roles": [{"id": 3, "slug": "router"}],
+        "dcim.sites": [{"id": 4, "slug": "ams"}],
+        "dcim.devices": [{"id": 5, "name": "r1", "site": {"id": 4}, "device_type": {"id": 2}, "role": {"id": 3}}],
+        "dcim.interfaces": [{"id": 6, "device": {"id": 5}, "name": "eth0"}],
+    }, read_only=True)
+    target = FakeClient({})
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"dcim.interface"}, tenant_filter=[], mapping_overrides={},
+    )
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+    return job, target
+
+
+def test_rollback_deletes_created_dependency_chain_in_reverse_order(db):
+    job, target = _executed_site_device_interface_job(db)
+
+    rollback_job(db, job, registry=REGISTRY, target_client=target)
+
+    assert job.status == "rolled_back"
+    deleted_types = [endpoint for endpoint, _ in target.deleted]
+    assert deleted_types.index("dcim.interfaces") < deleted_types.index("dcim.devices")
+    assert deleted_types.index("dcim.devices") < deleted_types.index("dcim.sites")
+
+
+def test_rollback_never_touches_mapped_or_updated_objects(db):
+    job = _make_job(db)
+    job.status = "completed"
+    items = [
+        models.MigrationJobItem(job_id=job.id, order_index=0, object_type="dcim.site", source_id=1, planned_action="create", execution_status="done", target_id=101),
+        models.MigrationJobItem(job_id=job.id, order_index=1, object_type="dcim.site", source_id=2, planned_action="map", execution_status="done", target_id=102),
+        models.MigrationJobItem(job_id=job.id, order_index=2, object_type="dcim.site", source_id=3, planned_action="update", execution_status="done", target_id=103),
+    ]
+    db.add_all(items); db.commit()
+    target = FakeClient({"dcim.sites": [{"id": 101}, {"id": 102}, {"id": 103}]})
+
+    rollback_job(db, job, registry=REGISTRY, target_client=target)
+
+    assert target.deleted == [("dcim.sites", 101)]
+    assert {row["id"] for row in target.data["dcim.sites"]} == {102, 103}
+
+
+def test_rollback_crash_can_resume_without_double_delete(db):
+    job, target = _executed_site_device_interface_job(db)
+    original_delete = target.delete_by_id
+    calls = {"count": 0}
+
+    def crash_on_second_delete(endpoint, id_):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("simulated rollback process death")
+        return original_delete(endpoint, id_)
+
+    target.delete_by_id = crash_on_second_delete
+    with pytest.raises(RuntimeError, match="simulated rollback"):
+        rollback_job(db, job, registry=REGISTRY, target_client=target)
+    first_deleted = target.deleted[0]
+    assert job.status == "rolling_back"
+
+    target.delete_by_id = original_delete
+    rollback_job(db, job, registry=REGISTRY, target_client=target)
+
+    assert job.status == "rolled_back"
+    assert target.deleted.count(first_deleted) == 1
+
+
+def test_rollback_records_delete_failure_and_continues(db):
+    job, target = _executed_site_device_interface_job(db)
+    original_delete = target.delete_by_id
+
+    def fail_device(endpoint, id_):
+        if endpoint.key == "dcim.devices":
+            raise MigrationApiError("still referenced")
+        return original_delete(endpoint, id_)
+
+    target.delete_by_id = fail_device
+    rollback_job(db, job, registry=REGISTRY, target_client=target)
+
+    assert job.status == "rolled_back_with_errors"
+    failed = db.query(models.MigrationJobItem).filter_by(job_id=job.id, execution_status="rollback_error").one()
+    assert failed.object_type == "dcim.device"
+    assert "still referenced" in failed.error_detail
+    assert any(endpoint == "dcim.sites" for endpoint, _ in target.deleted)
 
 
 def test_tags_are_resolved_to_target_ids_not_sent_as_raw_nested_objects(db):

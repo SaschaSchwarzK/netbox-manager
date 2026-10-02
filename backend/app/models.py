@@ -17,13 +17,14 @@ RESOURCE_TYPES = ("*", "instance", "github_target")
 # MigrationJob.status
 MIGRATION_JOB_STATUSES = (
     "planned", "running", "completed", "completed_with_errors", "failed", "cancelled",
+    "rolling_back", "rolled_back", "rolled_back_with_errors",
 )
 # MigrationJob.phase
 MIGRATION_JOB_PHASES = ("primary", "patch", "done")
 # MigrationJobItem.planned_action / MigrationJobPatch have no "planned_action" of their own
 MIGRATION_ITEM_ACTIONS = ("create", "update", "map", "skip", "ambiguous")
 # MigrationJobItem.execution_status / MigrationJobPatch.execution_status
-MIGRATION_EXECUTION_STATUSES = ("pending", "done", "error")
+MIGRATION_EXECUTION_STATUSES = ("pending", "done", "error", "rolled_back", "rollback_error")
 
 
 class AccessMapping(Base):
@@ -223,7 +224,7 @@ class MigrationJobItem(Base):
     dropped_custom_fields_json: Mapped[str] = mapped_column(Text, default="[]")  # list[str], for the report's warnings
 
     target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # known immediately for map; filled in on create
-    execution_status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/done/error (skip & map start "done")
+    execution_status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/done/error/rolled_back/rollback_error
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

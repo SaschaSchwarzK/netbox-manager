@@ -689,6 +689,12 @@ export interface MigrationType {
   optional_dependencies: string[];
 }
 
+export interface MigrationTenant {
+  id: number;
+  name: string;
+  slug: string;
+}
+
 export interface MigrationMappingOverride {
   action: "map" | "skip" | "create";
   target_id?: number | null;
@@ -709,7 +715,17 @@ export interface MigrationPlanRequest {
 }
 
 export type MigrationJobStatus =
-  | "planned" | "running" | "completed" | "completed_with_errors" | "failed" | "cancelled";
+  | "planned" | "running" | "completed" | "completed_with_errors" | "failed" | "cancelled"
+  | "rolling_back" | "rolled_back" | "rolled_back_with_errors";
+
+export interface MigrationRollbackResult {
+  job: MigrationJobSummary;
+  detail: string;
+  deleted: number;
+  failed: number;
+  untouched_mapped: number;
+  untouched_updated: number;
+}
 
 export interface MigrationJobSummary {
   id: string;
@@ -757,6 +773,9 @@ export interface MigrationPreflightResult {
 
 export const migrationsApi = {
   types: () => request<MigrationType[]>("/migrations/types"),
+  tenants: (instanceId: string, query = "") => request<MigrationTenant[]>(
+    `/migrations/instances/${instanceId}/tenants${query ? `?q=${encodeURIComponent(query)}` : ""}`,
+  ),
   plan: (data: MigrationPlanRequest) =>
     request<MigrationJobSummary>("/migrations/plan", { method: "POST", body: JSON.stringify(data) }),
   jobs: () => request<MigrationJobSummary[]>("/migrations/jobs"),
@@ -772,5 +791,8 @@ export const migrationsApi = {
     }),
   cancel: (id: string) => request<MigrationJobSummary>(`/migrations/jobs/${id}/cancel`, { method: "POST" }),
   retryFailed: (id: string) => request<MigrationJobSummary>(`/migrations/jobs/${id}/retry-failed`, { method: "POST" }),
+  rollback: (id: string) => request<MigrationRollbackResult>(`/migrations/jobs/${id}/rollback`, {
+    method: "POST", body: JSON.stringify({ confirm: true }),
+  }),
   reportUrl: (id: string) => `/api/migrations/jobs/${id}/report`,
 };

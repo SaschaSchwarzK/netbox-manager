@@ -164,6 +164,10 @@ input, select, textarea {
 .content-type-grid label { min-width: 0; padding: 4px 3px; font-size: 12px; display: flex; align-items: center; gap: 6px; border-radius: 3px; }
 .content-type-grid label:hover { background: var(--panel-raised); }
 .content-type-grid label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.migration-type-option { min-width: 0; padding: 4px 3px; border-radius: 3px; }
+.migration-type-option:hover { background: var(--panel-raised); }
+.migration-type-option > label { padding: 0; }
+.migration-type-option > select { margin-top: 5px; width: 100%; font-size: 11px; padding: 5px; }
 .mapping-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .mapping-toolbar input { max-width: 420px; }
 .manual-mapping-editor { display: grid; grid-template-columns: 1.3fr 0.7fr 0.9fr 0.9fr auto; gap: 8px; align-items: center; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }

@@ -31,6 +31,22 @@ def test_real_registry_matches_tenant_relations_registry():
     assert errors == []
 
 
+def test_new_object_types_parse_and_resolve_dependency_closure():
+    registry = load_registry(force_reload=True)
+    expected = {
+        "ipam.fhrpgroupassignment", "ipam.service", "dcim.macaddress",
+        "extras.configtemplate", "ipam.vlantranslationpolicy",
+        "ipam.vlantranslationrule", "ipam.asnrange",
+    }
+    assert expected <= set(registry.types)
+    resolved = resolve_selection(expected, registry)
+    assert expected <= set(resolved)
+    assert resolved.index("ipam.fhrpgroup") < resolved.index("ipam.fhrpgroupassignment")
+    assert resolved.index("ipam.vlantranslationpolicy") < resolved.index("ipam.vlantranslationrule")
+    assert resolved.index("ipam.rir") < resolved.index("ipam.asnrange")
+    assert registry["dcim.macaddress"].min_netbox_version == (4, 2, 0)
+
+
 def test_resolve_selection_includes_required_and_optional_dependencies():
     registry = load_registry()
     resolved = resolve_selection({"dcim.device"}, registry)

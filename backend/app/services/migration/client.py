@@ -244,6 +244,15 @@ class RateLimitedClient:
             raise MigrationApiError(f"Cannot update {endpoint}: id={id_} no longer exists on the target")
         return self.call(lambda: record.update(payload))
 
+    def delete_by_id(self, endpoint, id_: int) -> bool:
+        """Delete an object by id; an already-absent object is an idempotent success."""
+        self._guard_write()
+        record = self.call(lambda: endpoint.get(id_))
+        if record is None:
+            return False
+        self.call(lambda: record.delete())
+        return True
+
     def get(self, endpoint, **filters) -> Any:
         return self.call(lambda: endpoint.get(**filters))
 

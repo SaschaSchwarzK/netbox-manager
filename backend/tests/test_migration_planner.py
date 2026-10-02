@@ -1,3 +1,5 @@
+import pytest
+
 from app.services.migration.matcher import MappingAction, MappingOverride
 from app.services.migration.planner import build_plan
 from app.services.migration.registry import load_registry
@@ -64,6 +66,7 @@ class FakeClient:
         self.read_only = read_only
         self.nb = _FakeNb()
         self.created: list[tuple[str, dict]] = []
+        self.deleted: list[tuple[str, int]] = []
         self._next_id = 90000
 
     def paginated(self, endpoint: _FakeEndpoint, **filters):
@@ -97,6 +100,17 @@ class FakeClient:
                 obj.update(payload)
                 return obj
         raise AssertionError(f"update_by_id: no object with id={id_} on {endpoint.key}")
+
+    def delete_by_id(self, endpoint: _FakeEndpoint, id_: int):
+        if self.read_only:
+            raise AssertionError("must never write to a read-only client")
+        rows = self.data.get(endpoint.key, [])
+        for index, obj in enumerate(rows):
+            if obj["id"] == id_:
+                rows.pop(index)
+                self.deleted.append((endpoint.key, id_))
+                return True
+        return False
 
 
 class OptionsFakeClient(FakeClient):
@@ -261,7 +275,7 @@ def test_deferred_fk_produces_a_planned_patch():
             "primary_ip4": {"id": 55},
         }],
         "dcim.interfaces": [{"id": 10, "device": {"id": 1}, "name": "mgmt0"}],
-        "ipam.ip_addresses": [{"id": 55, "address": "10.0.0.1/24", "assigned_object_type": "dcim.interface", "assigned_object": {"id": 10}}],
+        "ipam.ip_addresses": [{"id": 55, "address": "10.0.0.1/24", "assigned_object_type": "dcim.interface", "assigned_object_id": 10, "assigned_object": {"id": 10}}],
     }, read_only=True)
     target = FakeClient({})
 
@@ -343,6 +357,7 @@ def test_plan_ip_assigned_to_device_interface_produces_polymorphic_patch():
         "ipam.ip_addresses": [{
             "id": 55, "address": "10.0.0.1/24",
             "assigned_object_type": "dcim.interface",
+            "assigned_object_id": 10,
             "assigned_object": {"id": 10},
         }],
     }, read_only=True)
@@ -361,7 +376,7 @@ def test_plan_ip_assigned_to_device_interface_produces_polymorphic_patch():
     assert "assigned_object" not in ip_item.deferred_fk
     # The polymorphic patch must be present
     ip_patch = next(p for p in plan.patches if p.object_type == "ipam.ipaddress")
-    assert ip_patch.polymorphic_patch_fields == {"assigned_object": {"type": "dcim.interface", "id": 10}}
+    assert ip_patch.polymorphic_patch_fields == {"assigned_object_id": {"type": "dcim.interface", "id": 10}}
 
 
 def test_plan_ip_assigned_to_vm_interface_produces_polymorphic_patch():
@@ -373,7 +388,7 @@ def test_plan_ip_assigned_to_vm_interface_produces_polymorphic_patch():
         "ipam.ip_addresses": [{
             "id": 66, "address": "192.168.1.1/24",
             "assigned_object_type": "virtualization.vminterface",
-            "assigned_object": {"id": 20},
+            "assigned_object_id": 20,
         }],
     }, read_only=True)
     target = FakeClient({})
@@ -385,7 +400,7 @@ def test_plan_ip_assigned_to_vm_interface_produces_polymorphic_patch():
     )
 
     ip_patch = next(p for p in plan.patches if p.object_type == "ipam.ipaddress")
-    assert ip_patch.polymorphic_patch_fields == {"assigned_object": {"type": "virtualization.vminterface", "id": 20}}
+    assert ip_patch.polymorphic_patch_fields == {"assigned_object_id": {"type": "virtualization.vminterface", "id": 20}}
 
 
 # ── Fix 2: update_empty_only ─────────────────────────────────────────────────
@@ -535,3 +550,119 @@ def test_update_empty_only_zero_and_false_not_treated_as_empty_direct():
     assert vlan_item.planned_action == "update"
     assert "name" in vlan_item.static_fields        # "" is empty — fill it in
     assert "vid" not in vlan_item.static_fields     # 100 is non-empty — leave it
+
+
+@pytest.mark.parametrize(
+    ("type_key", "endpoint", "source_obj", "target_obj"),
+    [
+        ("extras.configtemplate", "extras.config_templates", {"id": 1, "name": "base", "template_code": "x"}, {"id": 101, "name": "base"}),
+        ("dcim.macaddress", "dcim.mac_addresses", {"id": 2, "mac_address": "00:11:22:33:44:55"}, {"id": 102, "mac_address": "00:11:22:33:44:55"}),
+        ("ipam.vlantranslationpolicy", "ipam.vlan_translation_policies", {"id": 3, "name": "edge"}, {"id": 103, "name": "edge"}),
+    ],
+)
+def test_planner_maps_new_catalog_types_by_natural_key(type_key, endpoint, source_obj, target_obj):
+    plan = build_plan(
+        registry=REGISTRY,
+        source_client=FakeClient({endpoint: [source_obj]}, read_only=True),
+        target_client=FakeClient({endpoint: [target_obj]}),
+        selected_types={type_key}, tenant_filter=[], mapping_overrides={},
+        source_netbox_version="4.6.8",
+    )
+    item = next(item for item in plan.items if item.object_type == type_key)
+    assert item.planned_action == "map"
+    assert item.target_id == target_obj["id"]
+
+
+def test_planner_creates_fhrp_assignment_and_resolves_polymorphic_natural_key():
+    source = FakeClient({
+        "ipam.fhrp_groups": [{"id": 1, "protocol": "vrrp2", "group_id": 10}],
+        "dcim.interfaces": [{"id": 2, "device": {"id": 99}, "name": "eth0"}],
+        "ipam.fhrp_group_assignments": [{
+            "id": 3, "group": {"id": 1}, "interface_type": "dcim.interface",
+            "interface_id": 2, "interface": {"id": 2}, "priority": 100,
+        }],
+    }, read_only=True)
+    target = FakeClient({})
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"ipam.fhrpgroupassignment"}, tenant_filter=[], mapping_overrides={},
+    )
+    item = next(item for item in plan.items if item.object_type == "ipam.fhrpgroupassignment")
+    assert item.planned_action == "create"
+    assert item.polymorphic_fk == {"interface_id": {"type": "dcim.interface", "id": 2}}
+    assert "interface" not in item.static_fields
+
+
+def test_planner_creates_service_with_polymorphic_parent_and_ipaddresses():
+    source = FakeClient({
+        "ipam.fhrp_groups": [{"id": 1, "protocol": "vrrp2", "group_id": 10}],
+        "ipam.services": [{
+            "id": 2, "parent_object_type": "ipam.fhrpgroup", "parent_object_id": 1,
+            "parent": {"id": 1}, "name": "dns", "protocol": "udp", "ports": [53],
+        }],
+    }, read_only=True)
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=FakeClient({}),
+        selected_types={"ipam.service"}, tenant_filter=[], mapping_overrides={},
+    )
+    item = next(item for item in plan.items if item.object_type == "ipam.service")
+    assert item.planned_action == "create"
+    assert item.polymorphic_fk == {"parent_object_id": {"type": "ipam.fhrpgroup", "id": 1}}
+    assert "parent" not in item.static_fields
+
+
+def test_planner_creates_vlan_translation_rule_and_asn_range_with_fk_mapping():
+    source = FakeClient({
+        "ipam.vlan_translation_policies": [{"id": 1, "name": "edge"}],
+        "ipam.vlan_translation_rules": [{"id": 2, "policy": {"id": 1}, "local_vid": 100, "remote_vid": 200}],
+        "ipam.rirs": [{"id": 3, "slug": "arin", "name": "ARIN"}],
+        "ipam.asn_ranges": [{"id": 4, "name": "private", "slug": "private", "rir": {"id": 3}, "start": 64512, "end": 65534}],
+    }, read_only=True)
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=FakeClient({}),
+        selected_types={"ipam.vlantranslationrule", "ipam.asnrange"}, tenant_filter=[], mapping_overrides={},
+    )
+    rule = next(item for item in plan.items if item.object_type == "ipam.vlantranslationrule")
+    asn_range = next(item for item in plan.items if item.object_type == "ipam.asnrange")
+    assert rule.planned_action == asn_range.planned_action == "create"
+    assert rule.fk_refs == {"policy": 1}
+    assert asn_range.fk_refs == {"rir": 3}
+
+
+def test_mac_address_is_skipped_on_old_source_version_with_warning():
+    plan = build_plan(
+        registry=REGISTRY, source_client=FakeClient({}, read_only=True), target_client=FakeClient({}),
+        selected_types={"dcim.macaddress"}, tenant_filter=[], mapping_overrides={},
+        source_netbox_version="4.1.11",
+    )
+    assert "dcim.macaddress" not in plan.resolved_types
+    assert any("dcim.macaddress was skipped" in warning for warning in plan.warnings)
+
+
+def test_mac_address_is_included_on_supported_source_version():
+    plan = build_plan(
+        registry=REGISTRY,
+        source_client=FakeClient({"dcim.mac_addresses": [{"id": 1, "mac_address": "00:11:22:33:44:55"}]}, read_only=True),
+        target_client=FakeClient({}), selected_types={"dcim.macaddress"},
+        tenant_filter=[], mapping_overrides={}, source_netbox_version="4.2.0",
+    )
+    assert "dcim.macaddress" in plan.resolved_types
+    assert any(item.object_type == "dcim.macaddress" for item in plan.items)
+
+
+def test_device_config_template_is_resolved_instead_of_passed_through_raw():
+    source = FakeClient({
+        "extras.config_templates": [{"id": 7, "name": "router"}],
+        "dcim.manufacturers": [{"id": 1, "slug": "acme"}],
+        "dcim.device_types": [{"id": 2, "manufacturer": {"id": 1}, "model": "R1"}],
+        "dcim.device_roles": [{"id": 3, "slug": "router"}],
+        "dcim.sites": [{"id": 4, "slug": "ams"}],
+        "dcim.devices": [{"id": 5, "name": "r1", "site": {"id": 4}, "device_type": {"id": 2}, "role": {"id": 3}, "config_template": {"id": 7}}],
+    }, read_only=True)
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=FakeClient({}),
+        selected_types={"dcim.device"}, tenant_filter=[], mapping_overrides={},
+    )
+    device = next(item for item in plan.items if item.object_type == "dcim.device")
+    assert device.fk_refs["config_template"] == 7
+    assert "config_template" not in device.static_fields
