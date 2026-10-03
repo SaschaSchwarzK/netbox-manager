@@ -24,7 +24,9 @@
 #   dependencies:    object types (registry keys) that MUST exist on the target
 #     before this type can be created. Pulled in transitively, referenced-only
 #     (only the specific objects actually referenced by selected data, not
-#     every object of that type on the source).
+#     every object of that type on the source). The planner discovers these ids
+#     in a read-only pass before processing the resulting objects in topological
+#     dependency order.
 #   optional_dependencies: object types this type MAY reference (tenant,
 #     platform, rack, ...). Same referenced-only inclusion, but migrating the
 #     primary type never fails just because one of these is absent/skipped —

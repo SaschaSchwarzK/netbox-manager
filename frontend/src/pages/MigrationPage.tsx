@@ -96,9 +96,8 @@ export default function MigrationPage() {
     return () => { active = false; };
   }, [sourceId]);
 
-  // Poll the active job while it's running, and bump reportNonce so the embedded report
-  // iframe reloads and shows live per-object progress (execution_status is read fresh from
-  // the DB on every report request — see services/migration/report.py).
+  // Poll summary counts while a job runs. The report itself stays stable so it can be read;
+  // users can refresh it explicitly, and it reloads once on a status transition.
   useEffect(() => {
     if (!job || TERMINAL.includes(job.status)) {
       if (pollRef.current) window.clearInterval(pollRef.current);
@@ -108,7 +107,7 @@ export default function MigrationPage() {
       try {
         const updated = await migrationsApi.job(job.id);
         setJob(updated);
-        setReportNonce((n) => n + 1);
+        if (updated.status !== job.status) setReportNonce((n) => n + 1);
       } catch { /* transient — next tick will retry */ }
     }, 2000);
     return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
@@ -472,7 +471,12 @@ export default function MigrationPage() {
       </div>
 
       <div className="card">
-        <h2>Detailed report {job.status === "running" && <span className="pill">live</span>}</h2>
+        <div className="mapping-toolbar">
+          <h2 style={{ margin: 0 }}>Detailed report {job.status === "running" && <span className="pill">snapshot</span>}</h2>
+          <button onClick={() => setReportNonce((n) => n + 1)}>Refresh report</button>
+          <button onClick={() => window.open(migrationsApi.reportUrl(job.id), "_blank")}>Open report</button>
+          <a className="button-link" href={migrationsApi.reportDownloadUrl(job.id)}>Download report</a>
+        </div>
         <iframe
           key={reportNonce}
           src={`${migrationsApi.reportUrl(job.id)}${reportNonce ? `?_=${reportNonce}` : ""}`}

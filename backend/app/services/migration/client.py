@@ -92,6 +92,8 @@ class RateLimitedClient:
     _sleep: Callable[[float], None] = field(default=time.sleep, repr=False)
     _now: Callable[[], float] = field(default=time.monotonic, repr=False)
     _options_cache: dict[str, dict[str, Any]] = field(default_factory=dict, init=False, repr=False)
+    _options_error_cache: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _options_disabled_reason: str | None = field(default=None, init=False, repr=False)
 
     def _throttle(self) -> None:
         if self.max_requests_per_second <= 0:
@@ -182,7 +184,7 @@ class RateLimitedClient:
         headers = {"accept": "application/json", "authorization": f"Token {self.nb.token}"}
         list_filters = {
             key: value for key, value in filters.items()
-            if key.endswith("_id") and isinstance(value, list) and len(value) > FILTER_CHUNK_SIZE
+            if isinstance(value, list) and len(value) > FILTER_CHUNK_SIZE
         }
         chunks = [
             [values[index:index + FILTER_CHUNK_SIZE] for index in range(0, len(values), FILTER_CHUNK_SIZE)]
@@ -258,12 +260,29 @@ class RateLimitedClient:
 
     def options(self, endpoint) -> dict[str, Any]:
         """Return cached endpoint metadata used for plan-time field warnings."""
-        key = endpoint.url
+        # pynetbox exposes endpoint URLs without the trailing slash. Avoid a
+        # redirect (which can lose authentication through some proxies) and
+        # remember failures too: OPTIONS validation is advisory, so a target
+        # that forbids it must cost one request per endpoint, not one request
+        # per migrated object.
+        key = endpoint.url.rstrip("/") + "/"
+        if self._options_disabled_reason is not None:
+            raise MigrationApiError(self._options_disabled_reason)
+        if key in self._options_error_cache:
+            raise MigrationApiError(self._options_error_cache[key])
         if key not in self._options_cache:
-            response = self.call(lambda: self.nb.http_session.options(endpoint.url, timeout=30))
-            response.raise_for_status()
-            data = response.json()
-            self._options_cache[key] = data if isinstance(data, dict) else {}
+            try:
+                response = self.call(lambda: self.nb.http_session.options(key, timeout=30))
+                response.raise_for_status()
+                data = response.json()
+                self._options_cache[key] = data if isinstance(data, dict) else {}
+            except Exception as exc:
+                message = str(exc)
+                self._options_error_cache[key] = message
+                response = _response_of(exc)
+                if response is not None and response.status_code in (401, 403):
+                    self._options_disabled_reason = message
+                raise MigrationApiError(message) from exc
         return self._options_cache[key]
 
     def _guard_write(self) -> None:

@@ -103,6 +103,8 @@ button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent-dim); border-color: var(--accent); color: #eafffb; }
 button.danger { border-color: var(--danger); color: var(--danger); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
+.button-link { background: var(--panel-raised); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 14px; font-size: 13px; text-decoration: none; }
+.button-link:hover { border-color: var(--accent); }
 
 input, select, textarea {
   background: var(--bg);
@@ -163,7 +165,8 @@ input, select, textarea {
 .content-type-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 2px 8px; padding: 7px 9px; }
 .content-type-grid label { min-width: 0; padding: 4px 3px; font-size: 12px; display: flex; align-items: center; gap: 6px; border-radius: 3px; }
 .content-type-grid label:hover { background: var(--panel-raised); }
-.content-type-grid label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.content-type-grid label input[type="checkbox"] { flex: 0 0 auto; width: auto; margin: 0; }
+.content-type-grid label span { min-width: 0; overflow-wrap: anywhere; }
 .migration-type-option { min-width: 0; padding: 4px 3px; border-radius: 3px; }
 .migration-type-option:hover { background: var(--panel-raised); }
 .migration-type-option > label { padding: 0; }

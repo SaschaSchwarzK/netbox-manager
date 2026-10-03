@@ -186,6 +186,9 @@ def test_full_plan_execute_report_cycle_through_the_router(db, instances):
     assert b"source.example/ipam/vrfs/1/" in report_html.body
     assert b"target.example/ipam/vrfs/100/" in report_html.body
 
+    download = migrations.get_report(job.id, format="html", download=True, db=db, _=_admin_ctx())
+    assert download.headers["content-disposition"] == f'attachment; filename="migration-{job.id}.html"'
+
     report_json = migrations.get_report(job.id, format="json", db=db, _=_admin_ctx())
     assert report_json["status"] == "completed"
 

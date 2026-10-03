@@ -25,6 +25,12 @@ placeholder correctly finds nothing on the real target (which is exactly
 right — a device whose site doesn't exist yet on the target obviously can't
 match an existing device scoped to that site either). See executor.py for
 how these placeholders get replaced by real ids as execution proceeds.
+
+Source discovery is deliberately separate from planning. Explicitly selected
+root types are fetched first; their actual FK values are then followed
+recursively so auto-included dependencies are fetched by id only. Planning
+still runs afterward in the registry's original topological order, with every
+dependency fully discovered before any dependent is matched.
 """
 from __future__ import annotations
 
@@ -35,10 +41,12 @@ import re
 
 from app.services.migration.client import RateLimitedClient
 from app.services.migration.matcher import (
+    AmbiguousTargetLookup,
     IdMap,
     MappingOverride,
     MatchOutcome,
     TargetLookup,
+    _resolve_strategy,
     match_object,
 )
 from app.services.migration.registry import UNIVERSAL_TAG_TYPE, Registry, TypeSpec, resolve_selection
@@ -89,24 +97,102 @@ class PlanResult:
 
 
 class LiveTargetLookup:
-    """Real TargetLookup backed by the target RateLimitedClient — one GET per candidate strategy."""
+    """TargetLookup backed by a per-type bulk index, with single-query fallback for execution."""
 
     def __init__(self, target_client: RateLimitedClient):
         self.target_client = target_client
         self._cache: dict[tuple[str, tuple], dict | None] = {}
+        self._ambiguous: set[tuple[str, tuple]] = set()
+
+    @staticmethod
+    def _cache_key(type_key: str, filters: dict[str, Any]) -> tuple[str, tuple]:
+        return type_key, tuple(sorted((key, _freeze(value)) for key, value in filters.items()))
+
+    def prepare(
+        self,
+        type_spec: TypeSpec,
+        source_objects: list[dict[str, Any]],
+        *,
+        registry: Registry,
+        id_map: IdMap,
+    ) -> None:
+        """Bulk-load all evaluable natural-key matches for one source type."""
+        endpoint = resolve_endpoint(self.target_client.nb, type_spec.endpoint)
+        for strategy in type_spec.match_strategies:
+            requested: dict[tuple[str, tuple], dict[str, Any]] = {}
+            for source_obj in source_objects:
+                filters = _resolve_strategy(
+                    type_spec, strategy, source_obj, registry=registry, id_map=id_map,
+                )
+                if filters is None or _contains_placeholder(filters):
+                    continue
+                requested[self._cache_key(type_spec.key, filters)] = filters
+            if not requested:
+                continue
+
+            query_filters: dict[str, list[Any]] = {}
+            for filters in requested.values():
+                for field_name, value in filters.items():
+                    values = query_filters.setdefault(field_name, [])
+                    if value not in values:
+                        values.append(value)
+
+            for target_obj in self.target_client.paginated(endpoint, **query_filters):
+                target_id = target_obj.get("id")
+                if type(target_id) is int:
+                    self._cache[self._cache_key(type_spec.key, {"id": target_id})] = dict(target_obj)
+                exact_filters = {
+                    field_name: _target_filter_value(target_obj, field_name)
+                    for field_name in query_filters
+                }
+                cache_key = self._cache_key(type_spec.key, exact_filters)
+                if cache_key not in requested:
+                    continue  # Cartesian superset from a multi-field list query.
+                existing = self._cache.get(cache_key)
+                if existing is not None and existing.get("id") != target_obj.get("id"):
+                    self._ambiguous.add(cache_key)
+                else:
+                    self._cache[cache_key] = dict(target_obj)
+
+            for cache_key in requested:
+                if cache_key not in self._ambiguous:
+                    self._cache.setdefault(cache_key, None)
 
     def find(self, type_spec: TypeSpec, scalar_filters: dict[str, Any]) -> dict[str, Any] | None:
-        cache_key = (type_spec.key, tuple(sorted((key, _freeze(value)) for key, value in scalar_filters.items())))
+        cache_key = self._cache_key(type_spec.key, scalar_filters)
+        if cache_key in self._ambiguous:
+            raise AmbiguousTargetLookup(
+                f"natural-key lookup {scalar_filters!r} matched multiple target {type_spec.key} objects; "
+                "choose one explicitly in Mapping review"
+            )
         if cache_key in self._cache:
             return self._cache[cache_key]
+        # Negative ids exist only inside the planner: they stand for related
+        # objects that this plan will create later. They can never match an
+        # existing target object, and NetBox rejects FK filters such as
+        # ``manufacturer_id=-36`` with HTTP 400 instead of returning an empty
+        # result. Treat that lookup as the known miss it is and never send the
+        # synthetic id to the target API.
+        if _contains_placeholder(scalar_filters):
+            self._cache[cache_key] = None
+            return None
         endpoint = resolve_endpoint(self.target_client.nb, type_spec.endpoint)
-        result = self.target_client.get(endpoint, **scalar_filters)
+        try:
+            result = self.target_client.get(endpoint, **scalar_filters)
+        except ValueError as exc:
+            if "more than one result" not in str(exc):
+                raise
+            raise AmbiguousTargetLookup(
+                f"natural-key lookup {scalar_filters!r} matched multiple target {type_spec.key} objects; "
+                "choose one explicitly in Mapping review"
+            ) from exc
         found = dict(result) if result is not None else None
         self._cache[cache_key] = found
         return found
 
     def clear_cache(self) -> None:
         self._cache.clear()
+        self._ambiguous.clear()
 
 
 def _freeze(value: Any) -> Any:
@@ -116,6 +202,26 @@ def _freeze(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return tuple(_freeze(item) for item in value)
     return value
+
+
+def _target_filter_value(target_obj: dict[str, Any], field_name: str) -> Any:
+    """Read a target list result in the same scalar shape used by NetBox filters."""
+    if field_name.endswith("_id"):
+        value = target_obj.get(field_name[:-3], target_obj.get(field_name))
+        return value.get("id") if isinstance(value, dict) else value
+    value = target_obj.get(field_name)
+    return value.get("value") if isinstance(value, dict) and "value" in value else value
+
+
+def _contains_placeholder(value: Any) -> bool:
+    """Whether a lookup value contains one of the planner's synthetic ids."""
+    if type(value) is int:
+        return value < 0
+    if isinstance(value, dict):
+        return any(_contains_placeholder(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_contains_placeholder(item) for item in value)
+    return False
 
 
 def resolve_endpoint(nb: Any, dotted: str) -> Any:
@@ -142,11 +248,11 @@ def _validate_preview_payload(
     endpoint = resolve_endpoint(target_client.nb, type_spec.endpoint)
     try:
         metadata = options_method(endpoint)
-    except Exception as exc:  # noqa: BLE001 - validation metadata is advisory
-        return [f"{type_spec.key}: field validation metadata unavailable: {exc}"]
+    except Exception:  # noqa: BLE001 - validation metadata is advisory only
+        return []
     post_fields = ((metadata.get("actions") or {}).get("POST") or {})
     if not isinstance(post_fields, dict) or not post_fields:
-        return [f"{type_spec.key}: NetBox did not provide POST field metadata; field validation was not performed."]
+        return []
     warnings: list[str] = []
     for field_name, field_spec in post_fields.items():
         if not isinstance(field_spec, dict):
@@ -228,10 +334,9 @@ def build_plan(
     if UNIVERSAL_TAG_TYPE in registry and UNIVERSAL_TAG_TYPE not in resolved_types:
         # `tags` is deliberately not a declared dependency of anything (see registry.py's
         # UNIVERSAL_TAG_FIELD) — it's universal rather than type-specific, so it can't be
-        # discovered by the normal referenced-only dependency closure. Every object that
-        # carries any tags needs the full tag id map available before it's processed, so
-        # extras.tag is unconditionally processed first, exactly as if it were a dependency
-        # of every selected type (which, in effect, it is).
+        # discovered by the normal type closure. Include the type first in topological order;
+        # the source discovery pass below still fetches only tag ids actually referenced by
+        # in-scope objects.
         resolved_types = [UNIVERSAL_TAG_TYPE, *resolved_types]
     id_map = IdMap()
     placeholders = _PlaceholderIds()
@@ -243,24 +348,20 @@ def build_plan(
             f"{type_key} was skipped because source NetBox {source_netbox_version} is older than required {required}."
         )
     conflict_policy = conflict_policy or {}
-    # Every type's source object ids, as they're processed — used to scope
-    # a dependent, non-tenant-filterable child type (interfaces, VM disks,
-    # console ports, ...) to just the parents that are actually in the plan,
-    # since those endpoints have no `tenant` query param of their own.
-    parent_source_ids: dict[str, set[int]] = {}
+    source_objects_by_type = _discover_source_objects(
+        source_client, registry=registry, resolved_types=resolved_types,
+        selected_types=selected_types, tenant_filter=tenant_filter,
+        include_untenanted=include_untenanted,
+    )
 
     for type_key in resolved_types:
         type_spec = registry[type_key]
         if type_spec.out_of_scope:
             continue
-        source_objects = _fetch_source_objects(
-            source_client, type_spec, registry=registry,
-            tenant_filter=tenant_filter, include_untenanted=include_untenanted,
-            parent_source_ids=parent_source_ids,
-        )
-        parent_source_ids[type_key] = {obj["id"] for obj in source_objects}
+        source_objects = source_objects_by_type.get(type_key, [])
         by_id = {obj["id"]: obj for obj in source_objects}
         ordered_objects = sorted(source_objects, key=lambda obj: _depth(type_spec, obj, by_id))
+        target_lookup.prepare(type_spec, ordered_objects, registry=registry, id_map=id_map)
 
         policy = conflict_policy.get(type_key, conflict_policy.get("default", DEFAULT_CONFLICT_POLICY))
         type_totals: dict[str, int] = {}
@@ -273,7 +374,9 @@ def build_plan(
             result.items.append(item)
             type_totals[item.planned_action] = type_totals.get(item.planned_action, 0) + 1
             if item.planned_action in ("create", "update"):
-                result.warnings.extend(_validate_preview_payload(target_client, type_spec, item.preview_payload))
+                for warning in _validate_preview_payload(target_client, type_spec, item.preview_payload):
+                    if warning not in result.warnings:
+                        result.warnings.append(warning)
 
             if item.planned_action in ("map", "update"):
                 id_map.put(type_key, item.source_id, item.target_id)
@@ -426,6 +529,106 @@ def _plan_one_object(
 # type's dependency on its parent (dcim.device / virtualization.virtualmachine)
 # is required, so the parent is always resolved first and always known.
 _PARENT_SCOPE_TYPES = {"dcim.device", "virtualization.virtualmachine"}
+
+
+def _reference_ids(value: Any) -> set[int]:
+    if value is None:
+        return set()
+    if isinstance(value, dict):
+        value = value.get("id")
+    if isinstance(value, (list, tuple, set)):
+        result: set[int] = set()
+        for item in value:
+            result.update(_reference_ids(item))
+        return result
+    return {value} if type(value) is int and value > 0 else set()
+
+
+def _references_from_object(type_spec: TypeSpec, source_obj: dict[str, Any]) -> dict[str, set[int]]:
+    """Return concrete dependency ids present on one already-in-scope source object."""
+    references: dict[str, set[int]] = {}
+    for field_name, dependency_type in type_spec.all_field_map.items():
+        ids = _reference_ids(source_obj.get(field_name))
+        if ids:
+            references.setdefault(dependency_type, set()).update(ids)
+    for field_name, poly_spec in type_spec.polymorphic_field_map.items():
+        discriminator = source_obj.get(poly_spec.discriminator_field)
+        dependency_type = poly_spec.type_values.get(discriminator)
+        ids = _reference_ids(source_obj.get(field_name))
+        if dependency_type and ids:
+            references.setdefault(dependency_type, set()).update(ids)
+    return references
+
+
+def _discover_source_objects(
+    source_client: RateLimitedClient,
+    *,
+    registry: Registry,
+    resolved_types: list[str],
+    selected_types: set[str],
+    tenant_filter: list[str],
+    include_untenanted: bool,
+) -> dict[str, list[dict[str, Any]]]:
+    """
+    Fetch selected roots in full, then recursively follow only their real FK ids.
+
+    This preliminary discovery pass resolves the otherwise backwards ordering
+    problem: dependencies must be planned first, but their scope is only known
+    after reading dependents. Keeping discovery read-only lets the real planning
+    pass retain the exact same dependency-first order and matching semantics.
+    """
+    resolved_set = set(resolved_types)
+    # Preserve the existing tenant-aware component behavior: when a selected
+    # child directly depends on a device/VM, fetch that parent root first so
+    # the child endpoint can be filtered to those in-scope parent ids.
+    parent_roots = {
+        dependency
+        for selected_type in selected_types
+        for dependency in registry[selected_type].dependencies
+        if dependency in _PARENT_SCOPE_TYPES and dependency in resolved_set
+    }
+    full_fetch_types = (set(selected_types) | parent_roots) & resolved_set
+    objects: dict[str, dict[int, dict[str, Any]]] = {}
+    parent_source_ids: dict[str, set[int]] = {}
+
+    for type_key in resolved_types:
+        if type_key not in full_fetch_types or registry[type_key].out_of_scope:
+            continue
+        rows = _fetch_source_objects(
+            source_client, registry[type_key], registry=registry,
+            tenant_filter=tenant_filter, include_untenanted=include_untenanted,
+            parent_source_ids=parent_source_ids,
+        )
+        objects[type_key] = {row["id"]: row for row in rows}
+        parent_source_ids[type_key] = set(objects[type_key])
+
+    attempted_ids: dict[str, set[int]] = {}
+    while True:
+        wanted: dict[str, set[int]] = {}
+        for type_key, rows_by_id in objects.items():
+            for row in rows_by_id.values():
+                for dependency_type, ids in _references_from_object(registry[type_key], row).items():
+                    if dependency_type in resolved_set and not registry[dependency_type].out_of_scope:
+                        wanted.setdefault(dependency_type, set()).update(ids)
+
+        fetched_any = False
+        for type_key in resolved_types:
+            if type_key in full_fetch_types:
+                continue
+            missing = wanted.get(type_key, set()) - attempted_ids.setdefault(type_key, set())
+            if not missing:
+                continue
+            attempted_ids[type_key].update(missing)
+            endpoint = resolve_endpoint(source_client.nb, registry[type_key].endpoint)
+            rows = list(source_client.paginated(endpoint, id=sorted(missing)))
+            destination = objects.setdefault(type_key, {})
+            before = len(destination)
+            destination.update((row["id"], row) for row in rows)
+            fetched_any = fetched_any or len(destination) > before
+        if not fetched_any:
+            break
+
+    return {type_key: list(rows.values()) for type_key, rows in objects.items()}
 
 
 def _fetch_source_objects(

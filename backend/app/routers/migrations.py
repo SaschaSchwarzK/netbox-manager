@@ -484,7 +484,7 @@ def _run_rollback_in_background(job_id: str) -> None:
 
 @router.get("/jobs/{job_id}/report")
 def get_report(
-    job_id: str, format: str = "html",
+    job_id: str, format: str = "html", download: bool = False,
     db: Session = Depends(get_db), _: AccessContext = Depends(require_role("viewer")),
 ):
     job = db.get(models.MigrationJob, job_id)
@@ -496,4 +496,5 @@ def get_report(
     report = build_report(db, job, registry)
     if format == "json":
         return render_json(report)
-    return Response(content=render_html(report), media_type="text/html")
+    headers = {"Content-Disposition": f'attachment; filename="migration-{job.id}.html"'} if download else None
+    return Response(content=render_html(report), media_type="text/html", headers=headers)

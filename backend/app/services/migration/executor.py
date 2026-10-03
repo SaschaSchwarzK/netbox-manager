@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.models import MigrationJob, MigrationJobItem, MigrationJobPatch
 from app.services.migration.client import MigrationApiError, RateLimitedClient
-from app.services.migration.matcher import IdMap
+from app.services.migration.matcher import AmbiguousTargetLookup, IdMap
 from app.services.migration.planner import LiveTargetLookup, resolve_endpoint
 from app.services.migration.registry import UNIVERSAL_TAG_FIELD, UNIVERSAL_TAG_TYPE, Registry, TypeSpec
 from app.services.migration.sanitize import resolve_fk_refs, resolve_polymorphic_fk_refs
@@ -226,7 +226,16 @@ def _execute_create_batch(
             if fail_fast:
                 return True
             continue
-        existing_id = _find_existing_by_natural_key(type_spec, static_fields, resolved_fk, target_lookup)
+        try:
+            existing_id = _find_existing_by_natural_key(type_spec, static_fields, resolved_fk, target_lookup)
+        except AmbiguousTargetLookup as exc:
+            item.execution_status = "error"
+            item.error_detail = str(exc)
+            item.executed_at = datetime.utcnow()
+            db.commit()
+            if fail_fast:
+                return True
+            continue
         if existing_id is not None:
             _mark_done(db, item, existing_id, id_map)
             continue
@@ -321,7 +330,7 @@ def _execute_pending_items(
             continue
         try:
             _execute_one_item(db, item, registry=registry, target_client=target_client, target_lookup=target_lookup, id_map=id_map)
-        except MigrationApiError as exc:
+        except (MigrationApiError, AmbiguousTargetLookup) as exc:
             item.execution_status = "error"
             item.error_detail = str(exc)
             item.executed_at = datetime.utcnow()

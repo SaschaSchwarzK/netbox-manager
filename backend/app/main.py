@@ -8,7 +8,7 @@ from starlette.responses import JSONResponse
 
 from app.auth import get_current_user_optional
 from app.config import settings
-from app.database import Base, SessionLocal, engine
+from app.database import Base, SessionLocal, engine, upgrade_existing_schema
 from app.routers import auth, device_types, drift, fleet, github, instances, migrations, search, tenant_permissions
 from app.routers import audit as audit_router
 from app.routers import custom_fields
@@ -50,6 +50,7 @@ if not settings.authentication_disabled and settings.local_admin_enabled:
     logger.info("Break-glass local admin login is enabled.")
 
 Base.metadata.create_all(bind=engine)
+upgrade_existing_schema(engine)
 
 app = FastAPI(title="NetBox Manager API", version="0.1.0")
 

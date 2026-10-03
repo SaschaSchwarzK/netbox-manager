@@ -46,6 +46,10 @@ class IdMap:
         return len(self._map)
 
 
+class AmbiguousTargetLookup(RuntimeError):
+    """A supposedly unique natural-key query matched multiple target objects."""
+
+
 class MappingAction(str, Enum):
     MAP = "map"
     CREATE = "create"
@@ -119,7 +123,10 @@ def match_object(
         if resolved is None:
             continue  # this strategy's fields aren't present, or an FK isn't resolved yet — try the next one
         tried_any_strategy = True
-        found = target_lookup.find(type_spec, resolved)
+        try:
+            found = target_lookup.find(type_spec, resolved)
+        except AmbiguousTargetLookup as exc:
+            return MatchResult(MatchOutcome.AMBIGUOUS, detail=str(exc))
         if found is not None:
             hits.append((strategy, found["id"]))
 

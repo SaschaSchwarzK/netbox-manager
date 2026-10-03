@@ -795,4 +795,5 @@ export const migrationsApi = {
     method: "POST", body: JSON.stringify({ confirm: true }),
   }),
   reportUrl: (id: string) => `/api/migrations/jobs/${id}/report`,
+  reportDownloadUrl: (id: string) => `/api/migrations/jobs/${id}/report?download=true`,
 };

@@ -174,8 +174,41 @@ def test_paginated_chunks_large_id_filters_and_deduplicates_results():
 
 
 @responses.activate
+def test_paginated_chunks_large_scalar_filters_for_bulk_matching():
+    for result_id in (1, 101, 201):
+        responses.get(
+            f"{API}/dcim/sites/",
+            json={"count": 1, "next": None, "previous": None, "results": [{"id": result_id}]},
+        )
+    client = _client()
+    results = list(client.paginated(client.nb.dcim.sites, slug=[f"site-{i}" for i in range(205)]))
+
+    assert [result["id"] for result in results] == [1, 101, 201]
+    assert len(responses.calls) == 3
+    assert responses.calls[0].request.url.count("slug=") == 100
+    assert responses.calls[1].request.url.count("slug=") == 100
+    assert responses.calls[2].request.url.count("slug=") == 5
+
+
+@responses.activate
 def test_create_many_requires_one_record_per_payload():
     responses.post(f"{API}/dcim/sites/", json=[{"id": 1}, {"id": 2}], status=201)
     client = _client()
     records = client.create_many(client.nb.dcim.sites, [{"name": "A"}, {"name": "B"}])
     assert [record.id for record in records] == [1, 2]
+
+
+@responses.activate
+def test_options_uses_canonical_url_and_caches_forbidden_response():
+    responses.options(f"{API}/dcim/interfaces/", status=403)
+    client = _client()
+
+    with pytest.raises(MigrationApiError):
+        client.options(client.nb.dcim.interfaces)
+    with pytest.raises(MigrationApiError):
+        client.options(client.nb.dcim.interfaces)
+    with pytest.raises(MigrationApiError):
+        client.options(client.nb.dcim.devices)
+
+    assert len(responses.calls) == 1
+    assert responses.calls[0].request.url == f"{API}/dcim/interfaces/"

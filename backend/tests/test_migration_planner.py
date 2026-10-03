@@ -48,7 +48,8 @@ def _matches(obj: dict, filters: dict) -> bool:
             if field_id not in allowed:
                 return False
         else:
-            if obj.get(key) != value:
+            allowed = value if isinstance(value, list) else [value]
+            if obj.get(key) not in allowed:
                 return False
     return True
 
@@ -67,14 +68,18 @@ class FakeClient:
         self.nb = _FakeNb()
         self.created: list[tuple[str, dict]] = []
         self.deleted: list[tuple[str, int]] = []
+        self.paginated_calls: list[tuple[str, dict]] = []
+        self.get_calls: list[tuple[str, dict]] = []
         self._next_id = 90000
 
     def paginated(self, endpoint: _FakeEndpoint, **filters):
+        self.paginated_calls.append((endpoint.key, filters))
         for obj in self.data.get(endpoint.key, []):
             if _matches(obj, filters):
                 yield obj
 
     def get(self, endpoint: _FakeEndpoint, **filters):
+        self.get_calls.append((endpoint.key, filters))
         for obj in self.data.get(endpoint.key, []):
             if _matches(obj, filters):
                 return obj
@@ -151,6 +156,30 @@ def test_plan_maps_existing_site_by_slug_and_creates_new_one():
     assert target.created == []  # never actually wrote anything
 
 
+def test_plan_marks_multiple_natural_key_matches_ambiguous_instead_of_crashing():
+    plan = build_plan(
+        registry=REGISTRY,
+        source_client=FakeClient({
+            "dcim.sites": [{"id": 1, "slug": "duplicate", "name": "Duplicate"}],
+        }, read_only=True),
+        target_client=FakeClient({
+            "dcim.sites": [
+                {"id": 10, "slug": "duplicate", "name": "Duplicate"},
+                {"id": 11, "slug": "duplicate", "name": "Duplicate"},
+            ],
+        }),
+        selected_types={"dcim.site"},
+        tenant_filter=[],
+        mapping_overrides={},
+    )
+
+    site = next(item for item in plan.items if item.object_type == "dcim.site")
+    assert site.planned_action == "ambiguous"
+    assert site.execution_status == "error"
+    assert "matched multiple target" in site.error_detail
+    assert "choose one explicitly" in site.error_detail
+
+
 def test_plan_resolves_device_fk_chain_and_orders_dependencies_first():
     source = FakeClient({
         "dcim.manufacturers": [{"id": 1, "slug": "cisco", "name": "Cisco"}],
@@ -189,6 +218,182 @@ def test_plan_resolves_device_fk_chain_and_orders_dependencies_first():
     # But fk_refs (what the executor actually resolves for real at execution time) holds the
     # original SOURCE ids, not the placeholders — those are a planning-only construct.
     assert device_item.fk_refs == {"site": 1, "device_type": 1, "role": 1}
+
+
+def test_dependency_discovery_fetches_only_sites_referenced_by_selected_devices():
+    source = FakeClient({
+        "dcim.sites": [{"id": i, "slug": f"site-{i}", "name": f"Site {i}"} for i in range(1, 11)],
+        "dcim.manufacturers": [{"id": 1, "slug": "acme"}],
+        "dcim.device_types": [{"id": 1, "manufacturer": {"id": 1}, "model": "R1"}],
+        "dcim.device_roles": [{"id": 1, "slug": "router"}],
+        "dcim.devices": [{
+            "id": 1, "name": "edge-1", "site": {"id": 3},
+            "device_type": {"id": 1}, "role": {"id": 1},
+        }],
+    }, read_only=True)
+
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=FakeClient({}),
+        selected_types={"dcim.device"}, tenant_filter=[], mapping_overrides={},
+    )
+
+    assert {item.source_id for item in plan.items if item.object_type == "dcim.site"} == {3}
+    site_calls = [filters for endpoint, filters in source.paginated_calls if endpoint == "dcim.sites"]
+    assert site_calls == [{"id": [3]}]
+
+
+def test_dependency_discovery_scopes_device_catalog_and_optional_references():
+    source = FakeClient({
+        "dcim.sites": [{"id": i, "slug": f"site-{i}"} for i in range(1, 6)],
+        "dcim.manufacturers": [{"id": i, "slug": f"maker-{i}"} for i in range(1, 6)],
+        "dcim.device_types": [
+            {"id": i, "manufacturer": {"id": i}, "model": f"Model {i}"} for i in range(1, 6)
+        ],
+        "dcim.device_roles": [{"id": i, "slug": f"role-{i}"} for i in range(1, 6)],
+        "tenancy.tenants": [{"id": i, "slug": f"tenant-{i}", "name": f"Tenant {i}"} for i in range(1, 6)],
+        "dcim.devices": [{
+            "id": 1, "name": "only-device", "site": {"id": 2},
+            "device_type": {"id": 4}, "role": {"id": 3}, "tenant": {"id": 5},
+        }],
+    }, read_only=True)
+
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=FakeClient({}),
+        selected_types={"dcim.device"}, tenant_filter=[], mapping_overrides={},
+    )
+
+    ids_by_type = {
+        type_key: {item.source_id for item in plan.items if item.object_type == type_key}
+        for type_key in ("dcim.site", "dcim.manufacturer", "dcim.devicetype", "dcim.devicerole", "tenancy.tenant")
+    }
+    assert ids_by_type == {
+        "dcim.site": {2}, "dcim.manufacturer": {4}, "dcim.devicetype": {4},
+        "dcim.devicerole": {3}, "tenancy.tenant": {5},
+    }
+
+
+def test_dependency_discovery_follows_location_site_and_full_region_parent_chain():
+    source = FakeClient({
+        "dcim.regions": [
+            {"id": 1, "slug": "world"},
+            {"id": 2, "slug": "unused"},
+            {"id": 3, "slug": "europe", "parent": {"id": 1}},
+        ],
+        "dcim.sites": [
+            {"id": 7, "slug": "used", "region": {"id": 3}},
+            {"id": 8, "slug": "unused", "region": {"id": 2}},
+        ],
+        "dcim.locations": [
+            {"id": 10, "slug": "building", "site": {"id": 7}},
+            {"id": 11, "slug": "room", "site": {"id": 7}, "parent": {"id": 10}},
+            {"id": 12, "slug": "unused", "site": {"id": 8}},
+        ],
+        "dcim.manufacturers": [{"id": 1, "slug": "acme"}],
+        "dcim.device_types": [{"id": 1, "manufacturer": {"id": 1}, "model": "R1"}],
+        "dcim.device_roles": [{"id": 1, "slug": "router"}],
+        "dcim.devices": [{
+            "id": 1, "name": "edge", "site": {"id": 7}, "location": {"id": 11},
+            "device_type": {"id": 1}, "role": {"id": 1},
+        }],
+    }, read_only=True)
+
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=FakeClient({}),
+        selected_types={"dcim.device"}, tenant_filter=[], mapping_overrides={},
+    )
+
+    assert {item.source_id for item in plan.items if item.object_type == "dcim.location"} == {10, 11}
+    assert {item.source_id for item in plan.items if item.object_type == "dcim.site"} == {7}
+    assert {item.source_id for item in plan.items if item.object_type == "dcim.region"} == {1, 3}
+
+
+def test_directly_selected_reference_type_is_fetched_in_full():
+    source = FakeClient({
+        "dcim.sites": [{"id": i, "slug": f"site-{i}"} for i in range(1, 5)],
+    }, read_only=True)
+
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=FakeClient({}),
+        selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={},
+    )
+
+    assert {item.source_id for item in plan.items if item.object_type == "dcim.site"} == {1, 2, 3, 4}
+    assert [filters for endpoint, filters in source.paginated_calls if endpoint == "dcim.sites"] == [{}]
+
+
+def test_bulk_target_matching_preserves_outcomes_with_constant_strategy_calls():
+    source = FakeClient({
+        "dcim.sites": [
+            {"id": i, "slug": f"site-{i}", "name": f"Site {i}"} for i in range(1, 7)
+        ],
+    }, read_only=True)
+    target = FakeClient({
+        "dcim.sites": [
+            {"id": 100 + i, "slug": f"site-{i}", "name": f"Site {i}"} for i in (1, 3, 5)
+        ],
+    })
+
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={},
+    )
+
+    outcomes = {item.source_id: item.planned_action for item in plan.items if item.object_type == "dcim.site"}
+    assert outcomes == {1: "map", 2: "create", 3: "map", 4: "create", 5: "map", 6: "create"}
+    site_calls = [filters for endpoint, filters in target.paginated_calls if endpoint == "dcim.sites"]
+    assert len(site_calls) == 2  # one slug query + one name query, versus 6 * 2 individual GETs before
+    assert target.get_calls == []
+
+
+def test_bulk_target_matching_keeps_duplicate_source_filter_semantics():
+    source = FakeClient({
+        "dcim.sites": [
+            {"id": 1, "slug": "same", "name": "Same"},
+            {"id": 2, "slug": "same", "name": "Same"},
+        ],
+    }, read_only=True)
+    target = FakeClient({"dcim.sites": [{"id": 90, "slug": "same", "name": "Same"}]})
+
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={},
+    )
+
+    sites = [item for item in plan.items if item.object_type == "dcim.site"]
+    assert [(item.source_id, item.planned_action, item.target_id) for item in sites] == [
+        (1, "map", 90), (2, "map", 90),
+    ]
+    assert len([call for call in target.paginated_calls if call[0] == "dcim.sites"]) == 2
+
+
+def test_plan_does_not_query_target_with_placeholder_foreign_key_ids():
+    class RejectNegativeFkClient(FakeClient):
+        def get(self, endpoint: _FakeEndpoint, **filters):
+            assert not any(type(value) is int and value < 0 for value in filters.values()), filters
+            return super().get(endpoint, **filters)
+
+    source = FakeClient({
+        "dcim.manufacturers": [{"id": 36, "slug": "acme", "name": "Acme"}],
+        "dcim.device_types": [{
+            "id": 1,
+            "manufacturer": {"id": 36},
+            "model": "Router 1",
+            "part_number": "R1",
+        }],
+    }, read_only=True)
+
+    plan = build_plan(
+        registry=REGISTRY,
+        source_client=source,
+        target_client=RejectNegativeFkClient({}),
+        selected_types={"dcim.devicetype"},
+        tenant_filter=[],
+        mapping_overrides={},
+    )
+
+    device_type = next(item for item in plan.items if item.object_type == "dcim.devicetype")
+    assert device_type.planned_action == "create"
+    assert device_type.fk_refs == {"manufacturer": 36}
 
 
 def test_tenant_filter_cascades_to_child_interfaces():
@@ -243,6 +448,8 @@ def test_ambiguous_devicetype_match_is_flagged_and_blocks_execution():
     assert devicetype_item.planned_action == "ambiguous"
     assert devicetype_item.execution_status == "error"
     assert plan.has_blocking_errors() is True
+    assert len([call for call in target.paginated_calls if call[0] == "dcim.device_types"]) == 2
+    assert target.get_calls == []
 
 
 def test_explicit_mapping_override_avoids_duplicate_even_without_natural_key_match():
