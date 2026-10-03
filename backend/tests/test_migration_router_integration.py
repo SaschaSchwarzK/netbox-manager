@@ -16,7 +16,6 @@ import responses
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app import crypto, models, schemas
 from app.rbac import AccessContext
@@ -27,21 +26,19 @@ API_TGT = "https://target.example/api"
 
 
 @pytest.fixture
-def db(monkeypatch):
-    # StaticPool: every session (including the one the background thread opens via the
-    # monkeypatched SessionLocal below) shares this single connection, so they all see the
-    # same in-memory database — a plain in-memory engine gives each new connection its own
-    # separate, empty database instead.
+def db(monkeypatch, tmp_path):
+    # A temporary file-backed SQLite database gives request and worker sessions separate
+    # connections. StaticPool's single shared connection is not safe when the test polls
+    # concurrently with a real background planning/execution thread.
     engine = create_engine(
-        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+        f"sqlite:///{tmp_path / 'migration-router.db'}", connect_args={"check_same_thread": False},
     )
     models.Base.metadata.create_all(engine)
     TestSession = sessionmaker(bind=engine)
     session = TestSession()
 
-    # execute_migration spins up a background thread that opens its OWN session via
-    # app.database.SessionLocal — point that at the same in-memory engine/connection
-    # pool so the test can observe what the thread does.
+    # Background workers open their OWN sessions via app.database.SessionLocal; point
+    # those sessions at this isolated test database.
     monkeypatch.setattr(migrations, "SessionLocal", TestSession)
 
     yield session
@@ -155,7 +152,6 @@ def test_full_plan_execute_report_cycle_through_the_router(db, instances):
         summary = migrations.get_job(summary.id, db=db, _=_admin_ctx())
         if summary.status != "planning":
             break
-        db.rollback()  # release StaticPool's single connection for the planning worker
         time.sleep(0.05)
     assert summary.status == "planned", summary.current_step
     assert summary.current_step == "Planning complete"
@@ -163,12 +159,13 @@ def test_full_plan_execute_report_cycle_through_the_router(db, instances):
 
     job = db.get(models.MigrationJob, summary.id)
     assert job is not None
+    job_id = job.id
     item = db.query(models.MigrationJobItem).filter_by(job_id=job.id).one()
     assert item.planned_action == "create"
     assert item.execution_status == "pending"
 
     exec_summary = migrations.execute_migration(
-        job.id, schemas.MigrationExecuteRequest(confirm=True), db=db, ctx=_admin_ctx(),
+        job_id, schemas.MigrationExecuteRequest(confirm=True), db=db, ctx=_admin_ctx(),
     )
     assert exec_summary.status == "running"
 
@@ -177,7 +174,7 @@ def test_full_plan_execute_report_cycle_through_the_router(db, instances):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         db.expire_all()
-        current = migrations.get_job(job.id, db=db, _=_admin_ctx())
+        current = migrations.get_job(job_id, db=db, _=_admin_ctx())
         if current.status in ("completed", "completed_with_errors", "failed"):
             break
         time.sleep(0.05)
@@ -185,19 +182,19 @@ def test_full_plan_execute_report_cycle_through_the_router(db, instances):
     assert current.totals["ipam.vrf"]["create"] == 1
 
     db.expire_all()
-    item = db.query(models.MigrationJobItem).filter_by(job_id=job.id).one()
+    item = db.query(models.MigrationJobItem).filter_by(job_id=job_id).one()
     assert item.execution_status == "done"
     assert item.target_id == 100
 
-    report_html = migrations.get_report(job.id, format="html", db=db, _=_admin_ctx())
+    report_html = migrations.get_report(job_id, format="html", db=db, _=_admin_ctx())
     assert b"customer-a" in report_html.body
     assert b"source.example/ipam/vrfs/1/" in report_html.body
     assert b"target.example/ipam/vrfs/100/" in report_html.body
 
-    download = migrations.get_report(job.id, format="html", download=True, db=db, _=_admin_ctx())
-    assert download.headers["content-disposition"] == f'attachment; filename="migration-{job.id}.html"'
+    download = migrations.get_report(job_id, format="html", download=True, db=db, _=_admin_ctx())
+    assert download.headers["content-disposition"] == f'attachment; filename="migration-{job_id}.html"'
 
-    report_json = migrations.get_report(job.id, format="json", db=db, _=_admin_ctx())
+    report_json = migrations.get_report(job_id, format="json", db=db, _=_admin_ctx())
     assert report_json["status"] == "completed"
 
 
@@ -245,6 +242,32 @@ def test_report_and_mapping_are_unavailable_while_plan_is_still_running(db, inst
     with pytest.raises(HTTPException) as mapping_error:
         migrations.get_mapping_skeleton(job.id, db=db, ctx=_admin_ctx())
     assert mapping_error.value.status_code == 409
+
+
+@responses.activate
+def test_manual_mapping_target_options_are_labelled_and_exclude_nonpositive_ids(db, instances):
+    source, target = instances
+    job = models.MigrationJob(
+        source_instance_id=source.id, target_instance_id=target.id, status="planned",
+    )
+    db.add(job)
+    db.commit()
+    responses.get(
+        f"{API_TGT}/dcim/interfaces/",
+        json={"count": 3, "next": None, "previous": None, "results": [
+            {"id": 10, "name": "eth0", "device": {"name": "router-01"}},
+            {"id": 11, "name": "eth0", "device": {"name": "router-02"}},
+            {"id": -1, "name": "placeholder", "device": {"name": "invalid"}},
+        ]},
+    )
+
+    choices = migrations.get_target_options(
+        job.id, object_type="dcim.interface", q="", db=db, ctx=_admin_ctx(),
+    )
+
+    assert [(choice.id, choice.label) for choice in choices] == [
+        (10, "router-01 · eth0"), (11, "router-02 · eth0"),
+    ]
 
 
 @pytest.mark.parametrize("status", ["planned", "running"])

@@ -759,6 +759,11 @@ export interface MigrationMappingSkeletonRow {
   action?: "map" | "skip" | "create" | null;
 }
 
+export interface MigrationTargetOption {
+  id: number;
+  label: string;
+}
+
 export interface MigrationPreflightSide {
   reachable: boolean;
   token_valid: boolean;
@@ -783,6 +788,9 @@ export const migrationsApi = {
   jobs: () => request<MigrationJobSummary[]>("/migrations/jobs"),
   job: (id: string) => request<MigrationJobSummary>(`/migrations/jobs/${id}`),
   mappingSkeleton: (id: string) => request<MigrationMappingSkeletonRow[]>(`/migrations/jobs/${id}/mapping-skeleton`),
+  targetOptions: (id: string, objectType: string, query = "") => request<MigrationTargetOption[]>(
+    `/migrations/jobs/${id}/target-options?object_type=${encodeURIComponent(objectType)}${query ? `&q=${encodeURIComponent(query)}` : ""}`,
+  ),
   preflight: (source_instance_id: string, target_instance_id: string) =>
     request<MigrationPreflightResult>("/migrations/preflight", {
       method: "POST", body: JSON.stringify({ source_instance_id, target_instance_id }),

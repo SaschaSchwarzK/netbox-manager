@@ -533,6 +533,11 @@ class MigrationMappingSkeletonRow(BaseModel):
     action: str | None = None
 
 
+class MigrationTargetOption(BaseModel):
+    id: int
+    label: str
+
+
 class MigrationPreflightSide(BaseModel):
     reachable: bool
     token_valid: bool

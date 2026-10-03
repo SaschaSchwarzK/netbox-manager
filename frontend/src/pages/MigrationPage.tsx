@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   instancesApi, migrationsApi, MigrationJobSummary, MigrationMappingOverride,
-  MigrationMappingSkeletonRow, MigrationTenant, MigrationType, NetboxInstance, MigrationPreflightResult,
+  MigrationMappingSkeletonRow, MigrationTargetOption, MigrationTenant, MigrationType, NetboxInstance, MigrationPreflightResult,
 } from "../api/client";
 
 type ConflictPolicy = "skip" | "update" | "update_empty_only";
@@ -32,6 +32,10 @@ function statusColor(status: MigrationJobSummary["status"]) {
   return "var(--muted)";
 }
 
+function targetOptionText(option: MigrationTargetOption) {
+  return option.label === `#${option.id}` ? option.label : `${option.label} (#${option.id})`;
+}
+
 export default function MigrationPage() {
   const [tab, setTab] = useState<"new" | "history">("new");
   const [instances, setInstances] = useState<NetboxInstance[]>([]);
@@ -56,6 +60,9 @@ export default function MigrationPage() {
   const [job, setJob] = useState<MigrationJobSummary | null>(null);
   const [skeleton, setSkeleton] = useState<MigrationMappingSkeletonRow[]>([]);
   const [mappingOverrides, setMappingOverrides] = useState<Record<string, MigrationMappingOverride>>({});
+  const [mappingDirty, setMappingDirty] = useState(false);
+  const [targetOptions, setTargetOptions] = useState<Record<string, MigrationTargetOption[]>>({});
+  const [targetOptionsBusy, setTargetOptionsBusy] = useState<Record<string, boolean>>({});
   const [mappingSearch, setMappingSearch] = useState("");
   const [manualType, setManualType] = useState("");
   const [manualSourceId, setManualSourceId] = useState("");
@@ -107,7 +114,10 @@ export default function MigrationPage() {
       try {
         const updated = await migrationsApi.job(job.id);
         setJob(updated);
-        if (updated.status !== job.status) setReportNonce((n) => n + 1);
+        if (updated.status !== job.status) {
+          setReportNonce((n) => n + 1);
+          if (job.status === "planning" && updated.status === "planned") setMappingDirty(false);
+        }
       } catch { /* transient — next tick will retry */ }
     }, 2000);
     return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
@@ -122,7 +132,7 @@ export default function MigrationPage() {
   };
 
   const resetWizard = () => {
-    setJob(null); setSkeleton([]); setMappingOverrides({}); setMappingSearch(""); setPreflight(null); setConfirmRun(false); setNotice(null); setSelectedTypes(new Set()); setConflictOverrides({});
+    setJob(null); setSkeleton([]); setMappingOverrides({}); setMappingDirty(false); setTargetOptions({}); setMappingSearch(""); setPreflight(null); setConfirmRun(false); setNotice(null); setSelectedTypes(new Set()); setConflictOverrides({});
   };
 
   useEffect(() => {
@@ -158,6 +168,7 @@ export default function MigrationPage() {
         mapping_overrides: overrides,
         job_id: reuseJobId,
       });
+      if (!reuseJobId) setMappingDirty(false);
       setJob(result); setReportNonce((n) => n + 1);
     } catch (e) { setNotice({ kind: "error", text: message(e) }); }
     finally { setBusy(false); }
@@ -175,6 +186,25 @@ export default function MigrationPage() {
     const query = mappingSearch.trim().toLowerCase();
     return !query || `${row.override_key} ${row.source_natural_key} ${row.target_natural_key ?? ""} ${row.auto_match}`.toLowerCase().includes(query);
   });
+  const mappingObjectTypes = Array.from(new Set(skeleton.map((row) => row.object_type))).sort();
+
+  const loadTargetOptions = async (objectType: string) => {
+    if (!job || !objectType || targetOptions[objectType] || targetOptionsBusy[objectType]) return;
+    setTargetOptionsBusy((previous) => ({ ...previous, [objectType]: true }));
+    try {
+      const rows = await migrationsApi.targetOptions(job.id, objectType);
+      setTargetOptions((previous) => ({ ...previous, [objectType]: rows.filter((row) => row.id > 0) }));
+    } catch (e) {
+      setNotice({ kind: "error", text: message(e) });
+    } finally {
+      setTargetOptionsBusy((previous) => ({ ...previous, [objectType]: false }));
+    }
+  };
+
+  const markMappingDirty = () => {
+    setMappingDirty(true);
+    setConfirmRun(false);
+  };
 
   const addManualMapping = () => {
     const type = manualType.trim();
@@ -193,7 +223,9 @@ export default function MigrationPage() {
       [`${type}:${sourceId}`]: { action: manualAction, target_id: manualAction === "map" ? targetId : null },
     };
     setMappingOverrides(next);
-    if (job) void planMigration(job.id, next);
+    markMappingDirty();
+    setManualSourceId("");
+    setManualTargetId("");
   };
 
   const runMigration = async () => {
@@ -440,9 +472,13 @@ export default function MigrationPage() {
         </div>
         {!skeleton.length && <p className="field-help">No planned objects are available for mapping review.</p>}
         {!!visibleSkeleton.length && <table>
-          <thead><tr><th>Source</th><th>Matched target</th><th>Action</th><th>Manual target ID</th></tr></thead>
+          <thead><tr><th>Source</th><th>Matched target</th><th>Action</th><th>Manual target</th></tr></thead>
           <tbody>{visibleSkeleton.map((row) => {
             const override = mappingOverrides[row.override_key];
+            const choices = [...(targetOptions[row.object_type] ?? [])];
+            if (row.target_id && row.target_id > 0 && !choices.some((choice) => choice.id === row.target_id)) {
+              choices.unshift({ id: row.target_id, label: row.target_natural_key ?? `#${row.target_id}` });
+            }
             return <tr key={row.override_key} style={row.auto_match === "ambiguous" ? { color: "var(--danger)" } : undefined}>
               <td>{row.object_type} #{row.source_id} ({row.source_natural_key})<br /><small>{row.match_detail}</small></td>
               <td>{row.target_id ? <>
@@ -450,33 +486,61 @@ export default function MigrationPage() {
                 <small>{row.auto_match} · target ID #{row.target_id}</small>
               </> : row.auto_match}</td>
               <td><select value={override?.action ?? ""} onChange={(e) => {
-                const action = e.target.value as MigrationMappingOverride["action"];
-                const next = { ...mappingOverrides, [row.override_key]: { action, target_id: action === "map" ? (override?.target_id ?? row.target_id ?? null) : null } };
+                const action = e.target.value as MigrationMappingOverride["action"] | "";
+                const next = { ...mappingOverrides };
+                if (!action) delete next[row.override_key];
+                else next[row.override_key] = {
+                  action,
+                  target_id: action === "map" ? (override?.target_id ?? (row.target_id && row.target_id > 0 ? row.target_id : null)) : null,
+                };
                 setMappingOverrides(next);
-                if (action !== "map" || next[row.override_key].target_id != null) void planMigration(job.id, next);
+                markMappingDirty();
+                if (action === "map") void loadTargetOptions(row.object_type);
               }}><option value="">Review…</option><option value="map">Map to existing</option><option value="skip">Skip</option><option value="create">Create new</option></select></td>
-              <td>{override?.action === "map" && <input type="number" value={override.target_id ?? ""} onChange={(e) => {
+              <td>{override?.action === "map" && <select
+                value={override.target_id && override.target_id > 0 ? override.target_id : ""}
+                onFocus={() => void loadTargetOptions(row.object_type)}
+                onChange={(e) => {
                 const target_id = Number(e.target.value) || null;
                 const next = { ...mappingOverrides, [row.override_key]: { ...override, target_id } };
                 setMappingOverrides(next);
-                if (target_id != null) void planMigration(job.id, next);
-              }} />}</td>
+                markMappingDirty();
+              }}>
+                <option value="">{targetOptionsBusy[row.object_type] ? "Loading targets…" : "Choose target…"}</option>
+                {choices.filter((choice) => choice.id > 0).map((choice) => (
+                  <option key={choice.id} value={choice.id}>{targetOptionText(choice)}</option>
+                ))}
+              </select>}</td>
             </tr>;
           })}</tbody>
         </table>}
         {!!skeleton.length && !visibleSkeleton.length && <p className="field-help">No mapping rows match the search.</p>}
         <div className="manual-mapping-editor">
           <strong>Add manual mapping</strong>
-          <input value={manualType} onChange={(e) => setManualType(e.target.value)} placeholder="type.key" />
+          <select value={manualType} onChange={(e) => {
+            setManualType(e.target.value); setManualTargetId("");
+            if (e.target.value) void loadTargetOptions(e.target.value);
+          }}>
+            <option value="">Choose object type…</option>
+            {mappingObjectTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+          </select>
           <input value={manualSourceId} onChange={(e) => setManualSourceId(e.target.value)} placeholder="Source ID" inputMode="numeric" />
           <select value={manualAction} onChange={(e) => setManualAction(e.target.value as MigrationMappingOverride["action"])}>
             <option value="map">Map to existing</option>
             <option value="skip">Skip</option>
             <option value="create">Create new</option>
           </select>
-          {manualAction === "map" && <input value={manualTargetId} onChange={(e) => setManualTargetId(e.target.value)} placeholder="Target ID" inputMode="numeric" />}
-          <button disabled={busy} onClick={addManualMapping}>Add and re-plan</button>
+          {manualAction === "map" && <select value={manualTargetId} onFocus={() => void loadTargetOptions(manualType)} onChange={(e) => setManualTargetId(e.target.value)}>
+            <option value="">{targetOptionsBusy[manualType] ? "Loading targets…" : "Choose target…"}</option>
+            {(targetOptions[manualType] ?? []).filter((choice) => choice.id > 0).map((choice) => (
+              <option key={choice.id} value={choice.id}>{targetOptionText(choice)}</option>
+            ))}
+          </select>}
+          <button disabled={busy} onClick={addManualMapping}>Add mapping</button>
         </div>
+        {mappingDirty && <p style={{ color: "var(--warning)", fontWeight: 600 }}>
+          Mapping changes are pending. Re-plan to apply them before starting the migration.
+        </p>}
       </div>
 
       <div className="card">
@@ -501,8 +565,8 @@ export default function MigrationPage() {
           </label>
           <div className="toolbar">
             <button onClick={resetWizard}>Start over</button>
-            <button disabled={busy} onClick={() => planMigration(job.id)}>Re-plan</button>
-            <button className="primary" disabled={busy || !confirmRun || ambiguousCount > 0} onClick={runMigration}>
+            <button disabled={busy || !mappingDirty} onClick={() => planMigration(job.id)}>Re-plan mapping changes</button>
+            <button className="primary" disabled={busy || mappingDirty || !confirmRun || ambiguousCount > 0} onClick={runMigration}>
               Run migration
             </button>
           </div>

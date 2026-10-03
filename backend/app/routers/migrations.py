@@ -25,9 +25,9 @@ from app.rbac import AccessContext, filter_scoped, require_resource_admin, requi
 from app.services.migration import registry as registry_mod
 from app.services.migration.client import build_client
 from app.services.migration.executor import execute_job
-from app.services.migration.matcher import MappingAction, MappingOverride
+from app.services.migration.matcher import MappingAction, MappingOverride, natural_key_label
 from app.services.migration.mapping_skeleton import build_mapping_skeleton
-from app.services.migration.planner import build_plan, persist_plan
+from app.services.migration.planner import build_plan, persist_plan, resolve_endpoint
 from app.services.migration.report import build_report, render_html, render_json
 from app.services.migration.rollback import rollback_job
 from app.services.netbox_client import check_migration_version_compatibility, test_connection
@@ -328,6 +328,43 @@ def get_mapping_skeleton(
         .all()
     )
     return [schemas.MigrationMappingSkeletonRow(**row.__dict__) for row in build_mapping_skeleton(items, registry)]
+
+
+@router.get("/jobs/{job_id}/target-options", response_model=list[schemas.MigrationTargetOption])
+def get_target_options(
+    job_id: str,
+    object_type: str,
+    q: str = Query(default="", max_length=100),
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(require_role("viewer")),
+):
+    """Return human-labelled target objects for a manual mapping dropdown."""
+    job = db.get(models.MigrationJob, job_id)
+    if job is None:
+        raise HTTPException(404, "Migration job not found.")
+    _require_job_visibility(job, ctx, db)
+    registry = registry_mod.load_registry()
+    if object_type not in registry:
+        raise HTTPException(400, f"Unknown migration object type {object_type!r}.")
+    target = _get_instance_or_404(db, job.target_instance_id)
+    options = json.loads(job.options_json or "{}")
+    client = build_client(
+        target.base_url, crypto.decrypt(target.api_token_encrypted), target.verify_ssl,
+        read_only=True, max_requests_per_second=options.get("max_requests_per_second", 4.0),
+    )
+    type_spec = registry[object_type]
+    endpoint = resolve_endpoint(client.nb, type_spec.endpoint)
+    filters = {"q": q.strip()} if q.strip() else {}
+    result = []
+    for row in client.paginated(endpoint, **filters):
+        target_id = row.get("id")
+        if type(target_id) is not int or target_id <= 0:
+            continue
+        result.append(schemas.MigrationTargetOption(
+            id=target_id,
+            label=natural_key_label(row, type_spec=type_spec) or f"#{target_id}",
+        ))
+    return result
 
 
 def _marker_tag_slug(source_instance: models.NetboxInstance | None) -> str:
