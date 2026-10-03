@@ -8,6 +8,7 @@ from app.tenant_permissions import MembersPresentError, TenantManager, TenantPer
 
 
 RELATIONS = {
+    "dcim.site": {"path": "tenant"},
     "dcim.device": {"path": "tenant"},
     "dcim.interface": {"path": "device__tenant"},
     "dcim.cable": {"path": None, "reason": "generic endpoints"},
@@ -50,6 +51,29 @@ def test_auto_view_and_suppression():
     assert valid["permissions"][0]["actions"] == ["view", "change"]
     assert valid["permissions"][1]["actions"] == ["add"]
     assert derive_ro_template(valid)["permissions"][1]["actions"] == ["view"]
+
+
+def test_render_combines_object_types_with_identical_actions_and_constraints():
+    valid = validate_template(template([
+        {"object_type": "dcim.device", "tenant_relation": "tenant", "actions": ["view", "change"]},
+        {"object_type": "dcim.site", "tenant_relation": "tenant", "actions": ["change", "view"]},
+        {"object_type": "dcim.interface", "tenant_relation": "device__tenant", "actions": ["view", "change"]},
+    ]), RELATIONS, BLOCKED)
+
+    rendered = render_template(valid, 42, "Acme Corp", "prod", "acme-rw")
+
+    assert rendered["permissions"] == [
+        {
+            "object_types": ["dcim.device", "dcim.site"],
+            "actions": ["view", "change"],
+            "constraints": {"tenant__id": 42},
+        },
+        {
+            "object_type": "dcim.interface",
+            "actions": ["view", "change"],
+            "constraints": {"device__tenant__id": 42},
+        },
+    ]
 
 
 class FakeRepo:

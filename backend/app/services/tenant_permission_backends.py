@@ -10,7 +10,7 @@ import yaml
 from github import GithubException, UnknownObjectException
 
 from app.services.github_repo import _repo
-from app.tenant_permissions import TenantPermissionError, permission_name
+from app.tenant_permissions import TenantPermissionError, combine_permissions, permission_name
 
 
 class RequestsNetBox:
@@ -64,10 +64,11 @@ class RequestsNetBox:
         rows = self._request("GET", "/users/permissions/", params={"group_id": group["id"], "limit": 1000})["results"]
         managed = {row["name"]: row for row in rows if row["name"].startswith(key + ":")}
         wanted = {}
-        for item in desired:
-            name = permission_name(key, item["object_type"])
+        for item in combine_permissions(desired):
+            object_types = sorted(item.get("object_types") or [item["object_type"]])
+            name = permission_name(key, object_types)
             wanted[name] = {
-                "name": name, "enabled": True, "object_types": [item["object_type"]],
+                "name": name, "enabled": True, "object_types": object_types,
                 "groups": [group["id"]], "actions": item["actions"], "constraints": item["constraints"],
             }
         created = updated = deleted = 0
@@ -91,15 +92,17 @@ class RequestsNetBox:
         return {"created": created, "updated": updated, "deleted": deleted}
 
     def plan_reconcile(self, group: dict[str, Any] | None, desired: list[dict[str, Any]], key: str) -> dict[str, int]:
+        desired = combine_permissions(desired)
         if group is None:
             return {"created": len(desired), "updated": 0, "deleted": 0}
         rows = self._request("GET", "/users/permissions/", params={"group_id": group["id"], "limit": 1000})["results"]
         managed = {row["name"]: row for row in rows if row["name"].startswith(key + ":")}
         wanted = {}
         for item in desired:
-            name = permission_name(key, item["object_type"])
+            object_types = sorted(item.get("object_types") or [item["object_type"]])
+            name = permission_name(key, object_types)
             wanted[name] = {
-                "name": name, "enabled": True, "object_types": sorted([item["object_type"]]),
+                "name": name, "enabled": True, "object_types": object_types,
                 "groups": [int(group["id"])], "actions": sorted(item["actions"]),
                 "constraints": item["constraints"],
             }

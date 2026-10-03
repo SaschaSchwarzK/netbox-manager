@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -184,7 +185,7 @@ def render_template(template: dict[str, Any], tenant_id: int, tenant_name: str,
         "tenant": {"id": tenant_id, "name": tenant_name},
         "group": group_name,
         "template": {"name": template["name"], "version": template["version"]},
-        "permissions": permissions,
+        "permissions": combine_permissions(permissions),
         "unscoped_grants": unscoped,
         "skipped_unsupported": skipped,
     }
@@ -345,7 +346,40 @@ def _all_unscoped(rendered: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"role": role, **grant} for role, doc in rendered.items() for grant in doc["unscoped_grants"]]
 
 
-def permission_name(key: str, object_type: str) -> str:
+def combine_permissions(permissions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Combine object types only when their effective actions and constraints are identical."""
+    grouped: dict[tuple[tuple[str, ...], str], dict[str, Any]] = {}
+    order: list[tuple[tuple[str, ...], str]] = []
+    for permission in permissions:
+        actions = tuple(permission["actions"])
+        constraints = permission.get("constraints") or {}
+        group_key = (actions, json.dumps(constraints, sort_keys=True, separators=(",", ":")))
+        if group_key not in grouped:
+            grouped[group_key] = {
+                "object_types": [], "actions": list(actions), "constraints": constraints,
+            }
+            order.append(group_key)
+        object_types = permission.get("object_types") or [permission["object_type"]]
+        for object_type in object_types:
+            if object_type not in grouped[group_key]["object_types"]:
+                grouped[group_key]["object_types"].append(object_type)
+
+    result: list[dict[str, Any]] = []
+    for group_key in order:
+        permission = grouped[group_key]
+        object_types = sorted(permission.pop("object_types"))
+        if len(object_types) == 1:
+            permission["object_type"] = object_types[0]
+        else:
+            permission["object_types"] = object_types
+        result.append(permission)
+    return result
+
+
+def permission_name(key: str, object_types: str | list[str]) -> str:
     """Stable <=100 character ownership marker used to track only our permissions."""
-    digest = hashlib.sha256(f"{key}:{object_type}".encode()).hexdigest()[:12]
-    return f"{key}:{object_type}:{digest}"[:100]
+    normalized = [object_types] if isinstance(object_types, str) else sorted(set(object_types))
+    identity = ",".join(normalized)
+    digest = hashlib.sha256(f"{key}:{identity}".encode()).hexdigest()[:12]
+    label = normalized[0] if len(normalized) == 1 else f"combined-{len(normalized)}"
+    return f"{key}:{label}:{digest}"[:100]
