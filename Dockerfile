@@ -30,8 +30,8 @@ replacements="$(awk '
             printf "--replace %s=%s ", source, target
         }
     ' /build/security/go-fixes.txt)"
-test -n "$replacements"
 # Intentional word splitting: each generated --replace pair is a separate xcaddy argument.
+# An empty or comments-only file expands to no extra arguments.
 CGO_ENABLED=0 /root/go/bin/xcaddy build "${CADDY_VERSION}" $replacements --output /out/caddy
 EOF
 
