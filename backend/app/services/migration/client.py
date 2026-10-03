@@ -246,6 +246,25 @@ class RateLimitedClient:
             raise MigrationApiError(f"Cannot update {endpoint}: id={id_} no longer exists on the target")
         return self.call(lambda: record.update(payload))
 
+    def update_many(self, endpoint, payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Bulk-PATCH records directly, avoiding pynetbox's GET-before-update path."""
+        self._guard_write()
+        if not payloads:
+            return []
+        url = endpoint.url if endpoint.url.endswith("/") else f"{endpoint.url}/"
+        headers = {"accept": "application/json", "authorization": f"Token {self.nb.token}"}
+
+        def request():
+            response = self.nb.http_session.patch(url, json=payloads, headers=headers, timeout=30)
+            response.raise_for_status()
+            return response
+
+        response = self.call(request)
+        data = response.json()
+        if not isinstance(data, list):
+            raise MigrationApiError("NetBox bulk update returned a non-list response")
+        return data
+
     def delete_by_id(self, endpoint, id_: int) -> bool:
         """Delete an object by id; an already-absent object is an idempotent success."""
         self._guard_write()

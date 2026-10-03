@@ -118,6 +118,7 @@ def _mock_netbox_apis():
         ]},
     )
     _empty_list(f"{API_TGT}/ipam/vrfs/")  # no existing match -> create
+    responses.options(f"{API_TGT}/ipam/vrfs/", json={"actions": {"POST": {}}})
     responses.post(
         f"{API_TGT}/ipam/vrfs/",
         json=[{"id": 100, "name": "customer-a", "url": f"{API_TGT}/ipam/vrfs/100/"}],
@@ -130,13 +131,9 @@ def _mock_netbox_apis():
         json={"id": 999, "slug": "migrated-from-source", "name": "migrated-from-source"},
         status=201,
     )
-    responses.get(
-        f"{API_TGT}/ipam/vrfs/100/",
-        json={"id": 100, "name": "customer-a", "tags": [], "url": f"{API_TGT}/ipam/vrfs/100/"},
-    )
     responses.patch(
-        f"{API_TGT}/ipam/vrfs/100/",
-        json={"id": 100, "name": "customer-a", "tags": [999], "url": f"{API_TGT}/ipam/vrfs/100/"},
+        f"{API_TGT}/ipam/vrfs/",
+        json=[{"id": 100, "name": "customer-a", "tags": [999], "url": f"{API_TGT}/ipam/vrfs/100/"}],
     )
 
 
@@ -150,7 +147,18 @@ def test_full_plan_execute_report_cycle_through_the_router(db, instances):
         selected_types=["ipam.vrf"], tenant_filter=[],
     )
     summary = migrations.plan_migration(plan_request, request=_FakeRequest(), db=db, ctx=_admin_ctx())
-    assert summary.status == "planned"
+    assert summary.status == "planning"
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        db.expire_all()
+        summary = migrations.get_job(summary.id, db=db, _=_admin_ctx())
+        if summary.status != "planning":
+            break
+        db.rollback()  # release StaticPool's single connection for the planning worker
+        time.sleep(0.05)
+    assert summary.status == "planned", summary.current_step
+    assert summary.current_step == "Planning complete"
     assert summary.totals["ipam.vrf"]["create"] == 1
 
     job = db.get(models.MigrationJob, summary.id)
@@ -191,6 +199,52 @@ def test_full_plan_execute_report_cycle_through_the_router(db, instances):
 
     report_json = migrations.get_report(job.id, format="json", db=db, _=_admin_ctx())
     assert report_json["status"] == "completed"
+
+
+def test_planning_failure_is_persisted_for_polling(db, instances, monkeypatch):
+    source, target = instances
+    monkeypatch.setattr(
+        migrations, "check_migration_version_compatibility",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("source unreachable")),
+    )
+    summary = migrations.plan_migration(
+        schemas.MigrationPlanRequest(
+            source_instance_id=source.id, target_instance_id=target.id,
+            selected_types=["ipam.vrf"], tenant_filter=[],
+        ),
+        request=_FakeRequest(), db=db, ctx=_admin_ctx(),
+    )
+    assert summary.status == "planning"
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        db.expire_all()
+        current = migrations.get_job(summary.id, db=db, _=_admin_ctx())
+        if current.status == "failed":
+            break
+        db.rollback()
+        time.sleep(0.02)
+    assert current.status == "failed"
+    assert "source unreachable" in current.current_step
+    assert any("source unreachable" in warning for warning in current.warnings)
+
+
+def test_report_and_mapping_are_unavailable_while_plan_is_still_running(db, instances):
+    source, target = instances
+    job = models.MigrationJob(
+        source_instance_id=source.id, target_instance_id=target.id,
+        status="planning", current_step="Resolving Sites",
+    )
+    db.add(job)
+    db.commit()
+
+    with pytest.raises(HTTPException) as report_error:
+        migrations.get_report(job.id, db=db, _=_admin_ctx())
+    assert report_error.value.status_code == 409
+
+    with pytest.raises(HTTPException) as mapping_error:
+        migrations.get_mapping_skeleton(job.id, db=db, ctx=_admin_ctx())
+    assert mapping_error.value.status_code == 409
 
 
 @pytest.mark.parametrize("status", ["planned", "running"])

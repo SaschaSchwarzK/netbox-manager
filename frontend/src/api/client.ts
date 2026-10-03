@@ -715,7 +715,7 @@ export interface MigrationPlanRequest {
 }
 
 export type MigrationJobStatus =
-  | "planned" | "running" | "completed" | "completed_with_errors" | "failed" | "cancelled"
+  | "planning" | "planned" | "running" | "completed" | "completed_with_errors" | "failed" | "cancelled"
   | "rolling_back" | "rolled_back" | "rolled_back_with_errors";
 
 export interface MigrationRollbackResult {
@@ -735,6 +735,7 @@ export interface MigrationJobSummary {
   target_instance_name?: string | null;
   status: MigrationJobStatus;
   phase: "primary" | "patch" | "done";
+  current_step?: string | null;
   tenant_filter: string[];
   selected_types: string[];
   totals: Record<string, Record<string, number>>;
@@ -753,6 +754,7 @@ export interface MigrationMappingSkeletonRow {
   source_natural_key: string;
   auto_match: "matched" | "no_match" | "ambiguous";
   target_id?: number | null;
+  target_natural_key?: string | null;
   match_detail?: string | null;
   action?: "map" | "skip" | "create" | null;
 }

@@ -30,15 +30,28 @@ Base = declarative_base()
 def upgrade_existing_schema(bind: Engine) -> None:
     """Apply the small additive upgrades needed by pre-migration-tool databases."""
     inspector = inspect(bind)
-    if "migration_job_patches" not in inspector.get_table_names():
-        return
-    columns = {column["name"] for column in inspector.get_columns("migration_job_patches")}
-    if "polymorphic_patch_fields_json" not in columns:
+    tables = set(inspector.get_table_names())
+    patch_columns = (
+        {column["name"] for column in inspector.get_columns("migration_job_patches")}
+        if "migration_job_patches" in tables else set()
+    )
+    if "migration_job_patches" in tables and "polymorphic_patch_fields_json" not in patch_columns:
         with bind.begin() as connection:
             connection.execute(text(
                 "ALTER TABLE migration_job_patches "
                 "ADD COLUMN polymorphic_patch_fields_json TEXT NOT NULL DEFAULT '{}'"
             ))
+    additive_columns = {
+        "migration_jobs": ("current_step", "VARCHAR(512)"),
+        "migration_job_items": ("target_natural_key", "VARCHAR(512)"),
+    }
+    for table_name, (column_name, column_type) in additive_columns.items():
+        if table_name not in tables:
+            continue
+        existing = {column["name"] for column in inspect(bind).get_columns(table_name)}
+        if column_name not in existing:
+            with bind.begin() as connection:
+                connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
 
 
 def get_db():

@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Any
+from collections.abc import Callable
 import re
 
 from app.services.migration.client import RateLimitedClient
@@ -48,6 +49,7 @@ from app.services.migration.matcher import (
     TargetLookup,
     _resolve_strategy,
     match_object,
+    natural_key_label,
 )
 from app.services.migration.registry import UNIVERSAL_TAG_TYPE, Registry, TypeSpec, resolve_selection
 from app.services.migration.sanitize import build_preview_payload, extract_fields, resolve_fk_refs, ExtractedFields
@@ -72,6 +74,7 @@ class PlannedItem:
     preview_payload: dict[str, Any]   # best-effort payload for the report; NEVER sent to any API
     dropped_custom_fields: list[str]
     target_id: int | None            # a REAL target id (existing object); None for "create" (even though a placeholder exists in id_map during planning)
+    target_natural_key: str | None   # readable target label retained alongside target_id
     execution_status: str            # "pending" for create/update; "done" for map/skip; "error" for ambiguous
     error_detail: str | None = None
 
@@ -230,10 +233,7 @@ def resolve_endpoint(nb: Any, dotted: str) -> Any:
 
 
 def _natural_key_label(type_spec: TypeSpec, source_obj: dict[str, Any]) -> str:
-    for candidate_field in ("name", "slug", "model", "address", "prefix", "vid", "asn"):
-        if source_obj.get(candidate_field):
-            return str(source_obj[candidate_field])
-    return f"id={source_obj.get('id')}"
+    return natural_key_label(source_obj, type_spec=type_spec) or f"id={source_obj.get('id')}"
 
 
 def _validate_preview_payload(
@@ -318,6 +318,7 @@ def build_plan(
     conflict_policy: dict[str, str] | None = None,
     include_untenanted: bool = False,
     source_netbox_version: str | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> PlanResult:
     if not source_client.read_only:
         raise ValueError("build_plan requires a read-only source client")
@@ -348,10 +349,12 @@ def build_plan(
             f"{type_key} was skipped because source NetBox {source_netbox_version} is older than required {required}."
         )
     conflict_policy = conflict_policy or {}
+    if progress:
+        progress("Resolving selected source objects")
     source_objects_by_type = _discover_source_objects(
         source_client, registry=registry, resolved_types=resolved_types,
         selected_types=selected_types, tenant_filter=tenant_filter,
-        include_untenanted=include_untenanted,
+        include_untenanted=include_untenanted, progress=progress,
     )
 
     for type_key in resolved_types:
@@ -361,17 +364,22 @@ def build_plan(
         source_objects = source_objects_by_type.get(type_key, [])
         by_id = {obj["id"]: obj for obj in source_objects}
         ordered_objects = sorted(source_objects, key=lambda obj: _depth(type_spec, obj, by_id))
+        type_label = type_key.split(".")[-1].replace("_", " ").title()
+        if progress:
+            progress(f"Matching {type_label} against target (0/{len(ordered_objects)})")
         target_lookup.prepare(type_spec, ordered_objects, registry=registry, id_map=id_map)
 
         policy = conflict_policy.get(type_key, conflict_policy.get("default", DEFAULT_CONFLICT_POLICY))
         type_totals: dict[str, int] = {}
-        for source_obj in ordered_objects:
+        for object_index, source_obj in enumerate(ordered_objects, start=1):
             item = _plan_one_object(
                 type_spec, source_obj, registry=registry, id_map=id_map,
                 target_lookup=target_lookup, mapping_overrides=mapping_overrides,
                 conflict_policy=policy, warnings=result.warnings,
             )
             result.items.append(item)
+            if progress and (object_index % 10 == 0 or object_index == len(ordered_objects)):
+                progress(f"Matching {type_label} against target ({object_index}/{len(ordered_objects)})")
             type_totals[item.planned_action] = type_totals.get(item.planned_action, 0) + 1
             if item.planned_action in ("create", "update"):
                 for warning in _validate_preview_payload(target_client, type_spec, item.preview_payload):
@@ -433,6 +441,7 @@ def _plan_one_object(
                 planned_action="map", match_detail=match.detail,
                 static_fields={}, fk_refs={}, deferred_fk={}, polymorphic_fk={}, preview_payload={},
                 dropped_custom_fields=[], target_id=match.target_id, execution_status="done",
+                target_natural_key=match.target_natural_key,
             )
         extracted = extract_fields(type_spec, source_obj)
         if extracted.dropped_custom_fields:
@@ -455,6 +464,7 @@ def _plan_one_object(
                     static_fields={}, fk_refs={}, deferred_fk={}, polymorphic_fk={}, preview_payload={},
                     dropped_custom_fields=extracted.dropped_custom_fields,
                     target_id=match.target_id, execution_status="done",
+                    target_natural_key=match.target_natural_key,
                 )
             preview_payload = build_preview_payload(
                 type_spec,
@@ -468,6 +478,7 @@ def _plan_one_object(
                 deferred_fk={}, polymorphic_fk={}, preview_payload=preview_payload,
                 dropped_custom_fields=extracted.dropped_custom_fields,
                 target_id=match.target_id, execution_status="pending",
+                target_natural_key=match.target_natural_key,
             )
 
         preview_payload = build_preview_payload(type_spec, extracted, id_map=id_map)
@@ -479,6 +490,7 @@ def _plan_one_object(
             preview_payload=preview_payload,
             dropped_custom_fields=extracted.dropped_custom_fields,
             target_id=match.target_id, execution_status="pending",
+            target_natural_key=match.target_natural_key,
         )
     if match.outcome == MatchOutcome.SKIPPED_EXPLICIT:
         return PlannedItem(
@@ -486,6 +498,7 @@ def _plan_one_object(
             planned_action="skip", match_detail=match.detail,
             static_fields={}, fk_refs={}, deferred_fk={}, polymorphic_fk={}, preview_payload={},
             dropped_custom_fields=[], target_id=None, execution_status="done",
+            target_natural_key=None,
         )
     if match.outcome == MatchOutcome.AMBIGUOUS:
         return PlannedItem(
@@ -493,6 +506,7 @@ def _plan_one_object(
             planned_action="ambiguous", match_detail=match.detail,
             static_fields={}, fk_refs={}, deferred_fk={}, polymorphic_fk={}, preview_payload={},
             dropped_custom_fields=[], target_id=None, execution_status="error",
+            target_natural_key=None,
             error_detail=f"Ambiguous match, needs manual mapping: {match.detail}",
         )
     if match.outcome == MatchOutcome.UNRESOLVABLE:
@@ -518,6 +532,7 @@ def _plan_one_object(
         preview_payload=preview_payload,
         dropped_custom_fields=extracted.dropped_custom_fields,
         target_id=None, execution_status="pending",
+        target_natural_key=None,
     )
 
 
@@ -568,6 +583,7 @@ def _discover_source_objects(
     selected_types: set[str],
     tenant_filter: list[str],
     include_untenanted: bool,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """
     Fetch selected roots in full, then recursively follow only their real FK ids.
@@ -594,6 +610,8 @@ def _discover_source_objects(
     for type_key in resolved_types:
         if type_key not in full_fetch_types or registry[type_key].out_of_scope:
             continue
+        if progress:
+            progress(f"Resolving {type_key.split('.')[-1].replace('_', ' ').title()}")
         rows = _fetch_source_objects(
             source_client, registry[type_key], registry=registry,
             tenant_filter=tenant_filter, include_untenanted=include_untenanted,
@@ -618,6 +636,8 @@ def _discover_source_objects(
             missing = wanted.get(type_key, set()) - attempted_ids.setdefault(type_key, set())
             if not missing:
                 continue
+            if progress:
+                progress(f"Resolving {type_key.split('.')[-1].replace('_', ' ').title()}")
             attempted_ids[type_key].update(missing)
             endpoint = resolve_endpoint(source_client.nb, registry[type_key].endpoint)
             rows = list(source_client.paginated(endpoint, id=sorted(missing)))
@@ -676,6 +696,7 @@ def serialize_plan_item(item: PlannedItem) -> dict[str, Any]:
         "deferred_fk_json": json.dumps(item.deferred_fk),
         "dropped_custom_fields_json": json.dumps(item.dropped_custom_fields),
         "target_id": item.target_id,
+        "target_natural_key": item.target_natural_key,
         "execution_status": item.execution_status,
         "error_detail": item.error_detail,
     }

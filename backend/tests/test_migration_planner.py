@@ -70,6 +70,7 @@ class FakeClient:
         self.deleted: list[tuple[str, int]] = []
         self.paginated_calls: list[tuple[str, dict]] = []
         self.get_calls: list[tuple[str, dict]] = []
+        self.update_many_calls: list[tuple[str, list[dict]]] = []
         self._next_id = 90000
 
     def paginated(self, endpoint: _FakeEndpoint, **filters):
@@ -105,6 +106,14 @@ class FakeClient:
                 obj.update(payload)
                 return obj
         raise AssertionError(f"update_by_id: no object with id={id_} on {endpoint.key}")
+
+    def update_many(self, endpoint: _FakeEndpoint, payloads: list[dict]):
+        self.update_many_calls.append((endpoint.key, payloads))
+        updated = []
+        for payload in payloads:
+            record = self.update_by_id(endpoint, payload["id"], {k: v for k, v in payload.items() if k != "id"})
+            updated.append(record)
+        return updated
 
     def delete_by_id(self, endpoint: _FakeEndpoint, id_: int):
         if self.read_only:
@@ -218,6 +227,31 @@ def test_plan_resolves_device_fk_chain_and_orders_dependencies_first():
     # But fk_refs (what the executor actually resolves for real at execution time) holds the
     # original SOURCE ids, not the placeholders — those are a planning-only construct.
     assert device_item.fk_refs == {"site": 1, "device_type": 1, "role": 1}
+
+
+def test_component_natural_keys_include_their_owning_device():
+    source = FakeClient({
+        "dcim.manufacturers": [{"id": 1, "slug": "acme"}],
+        "dcim.device_types": [{"id": 2, "manufacturer": {"id": 1}, "model": "Router"}],
+        "dcim.device_roles": [{"id": 3, "slug": "router"}],
+        "dcim.sites": [{"id": 4, "slug": "ams"}],
+        "dcim.devices": [
+            {"id": 5, "name": "router-01", "site": {"id": 4}, "device_type": {"id": 2}, "role": {"id": 3}},
+            {"id": 6, "name": "router-02", "site": {"id": 4}, "device_type": {"id": 2}, "role": {"id": 3}},
+        ],
+        "dcim.interfaces": [
+            {"id": 10, "name": "eth0", "device": {"id": 5, "name": "router-01"}},
+            {"id": 11, "name": "eth0", "device": {"id": 6, "name": "router-02"}},
+        ],
+    }, read_only=True)
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=FakeClient({}),
+        selected_types={"dcim.interface"}, tenant_filter=[], mapping_overrides={},
+    )
+    labels = {
+        item.source_natural_key for item in plan.items if item.object_type == "dcim.interface"
+    }
+    assert labels == {"router-01 · eth0", "router-02 · eth0"}
 
 
 def test_dependency_discovery_fetches_only_sites_referenced_by_selected_devices():
@@ -873,3 +907,20 @@ def test_device_config_template_is_resolved_instead_of_passed_through_raw():
     device = next(item for item in plan.items if item.object_type == "dcim.device")
     assert device.fk_refs["config_template"] == 7
     assert "config_template" not in device.static_fields
+
+
+def test_build_plan_reports_type_specific_progress_with_counts():
+    progress: list[str] = []
+    source = FakeClient({
+        "dcim.sites": [
+            {"id": index, "slug": f"site-{index}", "name": f"Site {index}"}
+            for index in range(1, 13)
+        ],
+    }, read_only=True)
+    build_plan(
+        registry=REGISTRY, source_client=source, target_client=FakeClient({}),
+        selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={}, progress=progress.append,
+    )
+    assert any("Matching Site" in message for message in progress)
+    assert any("(10/12)" in message for message in progress)
+    assert any("(12/12)" in message for message in progress)

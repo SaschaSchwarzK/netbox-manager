@@ -14,6 +14,7 @@ class MappingSkeletonRow:
     source_natural_key: str
     auto_match: str
     target_id: int | None
+    target_natural_key: str | None
     match_detail: str | None
     action: str | None = None
 
@@ -32,6 +33,7 @@ def build_mapping_skeleton(items: list[MigrationJobItem], registry: Registry) ->
             source_natural_key=item.source_natural_key,
             auto_match=auto_match,
             target_id=item.target_id,
+            target_natural_key=item.target_natural_key,
             match_detail=item.match_detail,
         ))
     return rows

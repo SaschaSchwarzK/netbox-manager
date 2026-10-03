@@ -772,6 +772,7 @@ def test_marker_tag_reuses_existing_tag_and_is_idempotent_across_two_runs(db):
     assert len(target.data["extras.tags"]) == 1  # reused, not duplicated
     site = target.data["dcim.sites"][0]
     assert site["tags"] == [999]
+    assert target.update_many_calls == [("dcim.sites", [{"id": site["id"], "tags": [999]}])]
 
     # Re-running marker tagging again (e.g. a resumed job re-doing this best-effort step) must
     # not duplicate the tag on the object either.
@@ -815,6 +816,37 @@ def test_no_marker_tag_when_slug_is_none(db):
     db.refresh(job)
     assert job.status == "completed"
     assert "extras.tags" not in target.data or not target.data["extras.tags"]
+
+
+def test_execution_current_step_distinguishes_create_patch_and_marker_phases(db):
+    source = FakeClient({"dcim.sites": [{"id": 1, "slug": "lon-1", "name": "London"}]}, read_only=True)
+    target = FakeClient({})
+    plan = build_plan(
+        registry=REGISTRY, source_client=source, target_client=target,
+        selected_types={"dcim.site"}, tenant_filter=[], mapping_overrides={},
+    )
+    job = _make_job(db)
+    persist_plan(db, job.id, plan)
+    db.add(models.MigrationJobPatch(
+        job_id=job.id, order_index=0, object_type="dcim.site", source_id=1,
+        patch_fields_json="{}", polymorphic_patch_fields_json="{}",
+    ))
+    db.commit()
+
+    steps: list[str] = []
+    original_commit = db.commit
+    def recording_commit():
+        if job.current_step:
+            steps.append(job.current_step)
+        original_commit()
+    db.commit = recording_commit
+
+    execute_job(db, job, registry=REGISTRY, target_client=target, marker_tag_slug="migrated-from-test")
+
+    assert any(step.startswith("Creating Site (1/1)") for step in steps)
+    assert any(step.startswith("Applying deferred patches (1/1)") for step in steps)
+    assert "Applying marker tag" in steps
+    assert job.current_step == "Completed"
 
 
 def test_conflict_policy_update_actually_executes_the_update(db):

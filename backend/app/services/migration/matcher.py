@@ -88,6 +88,7 @@ class MatchOutcome(str, Enum):
 class MatchResult:
     outcome: MatchOutcome
     target_id: int | None = None
+    target_natural_key: str | None = None
     detail: str | None = None
     matched_strategy_fields: tuple[str, ...] | None = None
 
@@ -105,7 +106,15 @@ def match_object(
         if override.action == MappingAction.SKIP:
             return MatchResult(MatchOutcome.SKIPPED_EXPLICIT, detail="skipped via explicit mapping")
         if override.action == MappingAction.MAP:
-            return MatchResult(MatchOutcome.MAPPED_EXPLICIT, target_id=override.target_id)
+            # Manual mappings contain only an id. Resolve it once here so review/report
+            # surfaces are just as useful as auto-matches; LiveTargetLookup caches this
+            # id lookup, so later conflict-policy work does not add another API request.
+            found = target_lookup.find(type_spec, {"id": override.target_id}) if override.target_id is not None else None
+            return MatchResult(
+                MatchOutcome.MAPPED_EXPLICIT,
+                target_id=override.target_id,
+                target_natural_key=natural_key_label(found, type_spec=type_spec) if found else None,
+            )
         # action == CREATE falls through to the normal auto-match/create flow below,
         # since "create" is also the default outcome of finding no match — an
         # explicit "create" override just means "don't even try to auto-match".
@@ -116,7 +125,7 @@ def match_object(
     # target object but whose model matches a different one — can only be
     # detected by comparing what different strategies find, never by
     # stopping at the first hit.
-    hits: list[tuple[MatchStrategy, int]] = []
+    hits: list[tuple[MatchStrategy, int, str | None]] = []
     tried_any_strategy = False
     for strategy in type_spec.match_strategies:
         resolved = _resolve_strategy(type_spec, strategy, source_obj, registry=registry, id_map=id_map)
@@ -128,7 +137,7 @@ def match_object(
         except AmbiguousTargetLookup as exc:
             return MatchResult(MatchOutcome.AMBIGUOUS, detail=str(exc))
         if found is not None:
-            hits.append((strategy, found["id"]))
+            hits.append((strategy, found["id"], natural_key_label(found, type_spec=type_spec)))
 
     if not tried_any_strategy and type_spec.match_strategies:
         return MatchResult(
@@ -136,18 +145,57 @@ def match_object(
             detail="none of this type's match strategies could be evaluated "
                    "(missing fields, or a referenced dependency hasn't been resolved yet)",
         )
-    distinct_ids = {target_id for _, target_id in hits}
+    distinct_ids = {target_id for _, target_id, _ in hits}
     if len(distinct_ids) > 1:
-        detail = "; ".join(f"{'+'.join(s.fields)} -> target id {tid}" for s, tid in hits)
+        detail = "; ".join(
+            f"{'+'.join(s.fields)} -> {label or f'#{tid}'} (#{tid})" if label else
+            f"{'+'.join(s.fields)} -> #{tid}"
+            for s, tid, label in hits
+        )
         return MatchResult(MatchOutcome.AMBIGUOUS, detail=f"strategies disagree: {detail}")
     if hits:
-        best_strategy, target_id = hits[0]  # strategies are declared in priority order
-        return MatchResult(MatchOutcome.MATCHED, target_id=target_id, matched_strategy_fields=best_strategy.fields)
+        best_strategy, target_id, target_label = hits[0]  # strategies are declared in priority order
+        return MatchResult(
+            MatchOutcome.MATCHED, target_id=target_id, target_natural_key=target_label,
+            matched_strategy_fields=best_strategy.fields,
+        )
     return MatchResult(MatchOutcome.NO_MATCH)
 
 
 def _attempt_create_only(type_spec: TypeSpec) -> MatchResult:
     return MatchResult(MatchOutcome.NO_MATCH, detail="explicit override: create new (auto-match skipped)")
+
+
+def natural_key_label(obj: dict[str, Any] | None, *, type_spec: TypeSpec | None = None) -> str | None:
+    """Return a compact label, including the owning device/VM for component objects."""
+    if not obj:
+        return None
+    own_label: str | None = None
+    for candidate_field in ("name", "slug", "model", "address", "prefix", "vid", "asn"):
+        if obj.get(candidate_field) not in (None, ""):
+            own_label = str(obj[candidate_field])
+            break
+    # Some NetBox endpoints expose only their computed display string in list
+    # responses. It is less stable than a true natural key, but still preferable
+    # to showing an unexplained numeric id when the canonical fields are absent.
+    if own_label is None and obj.get("display") not in (None, ""):
+        own_label = str(obj["display"])
+
+    if type_spec is None:
+        return own_label
+    context_parts: list[str] = []
+    for field_name in ("device", "virtual_machine"):
+        parent_label = natural_key_label(obj.get(field_name)) if isinstance(obj.get(field_name), dict) else None
+        if parent_label:
+            context_parts.append(parent_label)
+    if type_spec.key == "dcim.module":
+        for field_name in ("module_bay", "module_type"):
+            part = natural_key_label(obj.get(field_name)) if isinstance(obj.get(field_name), dict) else None
+            if part and part not in context_parts:
+                context_parts.append(part)
+    if own_label and own_label not in context_parts:
+        context_parts.append(own_label)
+    return " · ".join(context_parts) or None
 
 
 def _resolve_strategy(

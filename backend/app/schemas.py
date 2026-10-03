@@ -528,6 +528,7 @@ class MigrationMappingSkeletonRow(BaseModel):
     source_natural_key: str
     auto_match: str
     target_id: int | None = None
+    target_natural_key: str | None = None
     match_detail: str | None = None
     action: str | None = None
 
@@ -575,6 +576,7 @@ class MigrationJobSummary(BaseModel):
     target_instance_name: str | None = None
     status: str
     phase: str
+    current_step: str | None = None
     tenant_filter: list[str]
     selected_types: list[str]
     totals: dict

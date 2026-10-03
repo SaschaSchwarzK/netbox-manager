@@ -62,6 +62,7 @@ def test_dry_run_report_shows_predicted_actions_before_execution(db):
     row_map = {r.source_natural_key: r for r in section.rows}
     assert row_map["Amsterdam 1"].action == "map"
     assert row_map["Amsterdam 1"].target_id == 100
+    assert row_map["Amsterdam 1"].target_natural_key == "Amsterdam 1"
     assert row_map["London 1"].action == "create"
     assert row_map["London 1"].target_id is None  # nothing created yet — this is still a preview
 
@@ -98,6 +99,8 @@ def test_html_report_renders_without_error_and_contains_key_content(db):
     assert "Sites" in html
     assert "Amsterdam 1" in html
     assert "https://source.example/dcim/sites/1/" in html
+    assert "Amsterdam 1 (#100)" in html
+    assert "#100" in html
 
 
 def test_html_report_escapes_hostile_content():
@@ -126,6 +129,21 @@ def test_json_report_structure(db):
     assert data["has_run"] is False
     site_section = next(s for s in data["sections"] if s["type"] == "dcim.site")
     assert {r["source_natural_key"] for r in site_section["rows"]} == {"Amsterdam 1", "London 1"}
+    matched = next(r for r in site_section["rows"] if r["target_id"] == 100)
+    assert matched["target_natural_key"] == "Amsterdam 1"
+
+
+def test_html_report_falls_back_to_target_id_when_label_is_unavailable():
+    from app.services.migration.report import ReportData, ReportRow, ReportSection
+    report = ReportData(
+        job_id="j1", status="planned", phase="primary", source_name="Src", target_name="Tgt", warnings=[],
+        sections=[ReportSection(type_key="dcim.site", title="Sites", summary="mapped", rows=[ReportRow(
+            source_id=1, source_natural_key="ams", source_link="", action="map", target_id=42,
+            target_link="https://target.example/dcim/sites/42/", execution_status="done",
+            error_detail=None, match_detail=None, target_natural_key=None,
+        )])],
+    )
+    assert ">#42</a>" in render_html(report)
 
 
 def test_warnings_surfaced_at_top_level(db):

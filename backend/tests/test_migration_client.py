@@ -199,6 +199,21 @@ def test_create_many_requires_one_record_per_payload():
 
 
 @responses.activate
+def test_update_many_uses_one_bulk_patch_without_getting_each_record_first():
+    responses.patch(
+        f"{API}/dcim/interfaces/",
+        json=[{"id": 10, "name": "eth0"}, {"id": 11, "name": "eth1"}],
+    )
+    client = _client()
+    result = client.update_many(client.nb.dcim.interfaces, [
+        {"id": 10, "tags": [99]}, {"id": 11, "tags": [99]},
+    ])
+    assert [row["id"] for row in result] == [10, 11]
+    assert len(responses.calls) == 1
+    assert responses.calls[0].request.method == "PATCH"
+
+
+@responses.activate
 def test_options_uses_canonical_url_and_caches_forbidden_response():
     responses.options(f"{API}/dcim/interfaces/", status=403)
     client = _client()

@@ -45,6 +45,7 @@ def rollback_job(
 ) -> None:
     """Delete this job's created objects, committing after every deletion."""
     job.status = "rolling_back"
+    job.current_step = "Preparing rollback"
     job.finished_at = None
     db.commit()
 
@@ -64,6 +65,7 @@ def rollback_job(
             break
 
         endpoint = resolve_endpoint(target_client.nb, registry[item.object_type].endpoint)
+        job.current_step = f"Rolling back {item.object_type.split('.')[-1].replace('_', ' ').title()} #{item.target_id}"
         try:
             target_client.delete_by_id(endpoint, item.target_id)
             item.execution_status = "rolled_back"
@@ -83,6 +85,7 @@ def rollback_job(
     ).first() is not None
     _refresh_rollback_totals(db, job)
     job.status = "rolled_back_with_errors" if has_errors else "rolled_back"
+    job.current_step = "Rollback completed with errors" if has_errors else "Rollback completed"
     job.finished_at = datetime.utcnow()
     db.commit()
     send_audit_entry({

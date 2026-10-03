@@ -28,7 +28,7 @@ function statusColor(status: MigrationJobSummary["status"]) {
   if (status === "completed_with_errors" || status === "failed") return "var(--danger)";
   if (status === "rolled_back_with_errors") return "var(--danger)";
   if (status === "rolled_back") return "var(--success)";
-  if (status === "running" || status === "rolling_back") return "var(--accent)";
+  if (status === "planning" || status === "running" || status === "rolling_back") return "var(--accent)";
   return "var(--muted)";
 }
 
@@ -126,9 +126,9 @@ export default function MigrationPage() {
   };
 
   useEffect(() => {
-    if (!job) { setSkeleton([]); return; }
+    if (!job || job.status === "planning") { setSkeleton([]); return; }
     migrationsApi.mappingSkeleton(job.id).then(setSkeleton).catch((e) => setNotice({ kind: "error", text: message(e) }));
-  }, [job?.id]);
+  }, [job?.id, job?.status]);
 
   const runPreflight = async () => {
     if (!sourceId || !targetId) return;
@@ -173,7 +173,7 @@ export default function MigrationPage() {
 
   const visibleSkeleton = skeleton.filter((row) => {
     const query = mappingSearch.trim().toLowerCase();
-    return !query || `${row.override_key} ${row.source_natural_key} ${row.auto_match}`.toLowerCase().includes(query);
+    return !query || `${row.override_key} ${row.source_natural_key} ${row.target_natural_key ?? ""} ${row.auto_match}`.toLowerCase().includes(query);
   });
 
   const addManualMapping = () => {
@@ -391,7 +391,13 @@ export default function MigrationPage() {
     {tab === "new" && job && <>
       <div className="card">
         <h2>Plan summary</h2>
-        <table>
+        {(job.status === "planning" || job.status === "running" || job.status === "rolling_back") && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+            <progress aria-label={`${job.status} in progress`} style={{ width: 72 }} />
+            <strong>{job.current_step ?? "Working…"}</strong>
+          </div>
+        )}
+        {job.status !== "planning" && <table>
           <thead><tr><th>Type</th><th>Create</th><th>Update</th><th>Map</th><th>Skip</th><th>Ambiguous</th><th>Errors</th><th>Rolled back</th><th>Rollback errors</th></tr></thead>
           <tbody>
             {Object.entries(job.totals).map(([type, counts]) => (
@@ -408,7 +414,7 @@ export default function MigrationPage() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </table>}
         {job.status !== "planned" && <div className="field-help" style={{ marginTop: 8 }}>Counts update as objects finish; pending objects are not included.</div>}
         {job.warnings.length > 0 && (
           <div style={{ marginTop: 14 }}>
@@ -426,7 +432,7 @@ export default function MigrationPage() {
         )}
       </div>
 
-      <div className="card">
+      {job.status !== "planning" && <><div className="card">
         <h2>Mapping review</h2>
         <div className="mapping-toolbar">
           <input value={mappingSearch} onChange={(e) => setMappingSearch(e.target.value)} placeholder="Search type, source ID, name or status" />
@@ -434,12 +440,15 @@ export default function MigrationPage() {
         </div>
         {!skeleton.length && <p className="field-help">No planned objects are available for mapping review.</p>}
         {!!visibleSkeleton.length && <table>
-          <thead><tr><th>Source</th><th>Auto-match</th><th>Action</th><th>Target ID</th></tr></thead>
+          <thead><tr><th>Source</th><th>Matched target</th><th>Action</th><th>Manual target ID</th></tr></thead>
           <tbody>{visibleSkeleton.map((row) => {
             const override = mappingOverrides[row.override_key];
             return <tr key={row.override_key} style={row.auto_match === "ambiguous" ? { color: "var(--danger)" } : undefined}>
               <td>{row.object_type} #{row.source_id} ({row.source_natural_key})<br /><small>{row.match_detail}</small></td>
-              <td>{row.auto_match}{row.target_id ? ` -> ${row.target_id}` : ""}</td>
+              <td>{row.target_id ? <>
+                <strong>{row.target_natural_key ?? `#${row.target_id}`}</strong><br />
+                <small>{row.auto_match} · target ID #{row.target_id}</small>
+              </> : row.auto_match}</td>
               <td><select value={override?.action ?? ""} onChange={(e) => {
                 const action = e.target.value as MigrationMappingOverride["action"];
                 const next = { ...mappingOverrides, [row.override_key]: { action, target_id: action === "map" ? (override?.target_id ?? row.target_id ?? null) : null } };
@@ -500,7 +509,8 @@ export default function MigrationPage() {
         </>}
 
         {(job.status === "running" || job.status === "rolling_back") && <div className="toolbar">
-          <span className="pill">Status: {job.status}{job.status === "running" ? ` (${job.phase} phase)` : ""}</span>
+          <span className="pill">Status: {job.status}</span>
+          <strong>{job.current_step ?? "Working…"}</strong>
           {job.status === "running" &&
           <button className="danger" onClick={cancelMigration}>Cancel</button>
           }
@@ -509,10 +519,10 @@ export default function MigrationPage() {
         {TERMINAL.includes(job.status) && <div className="toolbar">
           <span className="pill" style={{ color: statusColor(job.status) }}>Status: {job.status}</span>
           {job.status === "completed_with_errors" && <button disabled={busy} onClick={retryFailed}>Retry failed objects</button>}
-          {ROLLBACK_ELIGIBLE.includes(job.status) && <button className="danger" disabled={busy} onClick={rollbackMigration}>Rollback created objects</button>}
+          {ROLLBACK_ELIGIBLE.includes(job.status) && (job.status !== "failed" || job.started_at) && <button className="danger" disabled={busy} onClick={rollbackMigration}>Rollback created objects</button>}
           <button onClick={resetWizard}>Start a new migration</button>
         </div>}
-      </div>
+      </div></>}
     </>}
   </div>;
 }

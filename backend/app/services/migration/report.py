@@ -68,6 +68,7 @@ class ReportRow:
     execution_status: str
     error_detail: str | None
     match_detail: str | None
+    target_natural_key: str | None = None
 
 
 @dataclass
@@ -107,7 +108,9 @@ def build_report(db: Session, job: MigrationJob, registry: Registry) -> ReportDa
         patches_by_item.setdefault((patch.object_type, patch.source_id), []).append(patch)
 
     warnings = json.loads(job.warnings_json or "[]")
-    has_run = job.status != "planned"
+    has_run = job.status not in ("planning", "planned") and not (
+        job.status == "failed" and job.started_at is None
+    )
 
     by_type: dict[str, list[MigrationJobItem]] = {}
     for item in items:
@@ -129,6 +132,7 @@ def build_report(db: Session, job: MigrationJob, registry: Registry) -> ReportDa
             rows.append(ReportRow(
                 source_id=item.source_id, source_natural_key=item.source_natural_key, source_link=source_link,
                 action=item.planned_action, target_id=item.target_id if item.target_id and item.target_id > 0 else None,
+                target_natural_key=item.target_natural_key,
                 target_link=target_link, execution_status=item.execution_status,
                 error_detail=item.error_detail, match_detail="; ".join(note_parts) or None,
             ))
@@ -184,9 +188,10 @@ def render_html(report: ReportData) -> str:
         for row in section.rows:
             source_cell = f'<a href="{escape(row.source_link)}" target="_blank">{escape(row.source_natural_key)}</a>' if row.source_link else escape(row.source_natural_key)
             if row.target_link:
-                target_cell = f'<a href="{escape(row.target_link)}" target="_blank">#{row.target_id}</a>'
+                target_text = f"{row.target_natural_key} (#{row.target_id})" if row.target_natural_key else f"#{row.target_id}"
+                target_cell = f'<a href="{escape(row.target_link)}" target="_blank" title="Target ID #{row.target_id}">{escape(target_text)}</a>'
             elif row.target_id:
-                target_cell = f"#{row.target_id}"
+                target_cell = escape(f"{row.target_natural_key} (#{row.target_id})" if row.target_natural_key else f"#{row.target_id}")
             else:
                 target_cell = "—"
             icon = _STATUS_ICON.get(row.execution_status, "")
@@ -250,6 +255,7 @@ def render_json(report: ReportData) -> dict:
                     {
                         "source_id": r.source_id, "source_natural_key": r.source_natural_key,
                         "source_link": r.source_link, "action": r.action, "target_id": r.target_id,
+                        "target_natural_key": r.target_natural_key,
                         "target_link": r.target_link, "execution_status": r.execution_status,
                         "error_detail": r.error_detail, "note": r.match_detail,
                     }

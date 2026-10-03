@@ -130,6 +130,7 @@ def _execute_one_item(
         existing_target_id = _find_existing_by_natural_key(type_spec, static_fields, resolved_fk, target_lookup)
         if existing_target_id is not None:
             item.target_id = existing_target_id
+            item.target_natural_key = item.target_natural_key or item.source_natural_key
             item.execution_status = "done"
             item.executed_at = datetime.utcnow()
             db.commit()
@@ -137,6 +138,7 @@ def _execute_one_item(
             return
         created = target_client.create(endpoint, payload)
         item.target_id = created.id if hasattr(created, "id") else created["id"]
+        item.target_natural_key = item.source_natural_key
     elif item.planned_action == "update":
         # target_id is already set (it was the matched object's real id since plan time) —
         # restored after the bulk-create refactor accidentally dropped this branch, which
@@ -195,6 +197,7 @@ def _find_existing_by_natural_key(
 
 def _mark_done(db: Session, item: MigrationJobItem, target_id: int, id_map: IdMap) -> None:
     item.target_id = target_id
+    item.target_natural_key = item.target_natural_key or item.source_natural_key
     item.execution_status = "done"
     item.executed_at = datetime.utcnow()
     db.commit()
@@ -288,6 +291,13 @@ def _execute_pending_items(
 ) -> None:
     target_lookup = LiveTargetLookup(target_client)
     counter = 0
+    pending_rows = db.execute(select(MigrationJobItem.object_type).where(
+        MigrationJobItem.job_id == job.id, MigrationJobItem.execution_status == "pending",
+    )).all()
+    type_totals: dict[str, int] = {}
+    type_done: dict[str, int] = {}
+    for (type_key,) in pending_rows:
+        type_totals[type_key] = type_totals.get(type_key, 0) + 1
     while True:
         item = db.execute(
             select(MigrationJobItem)
@@ -302,6 +312,11 @@ def _execute_pending_items(
             _refresh_live_totals(db, job)
             return
         counter += 1
+        label = item.object_type.split(".")[-1].replace("_", " ").title()
+        verb = "Creating" if item.planned_action == "create" else "Updating"
+        next_index = type_done.get(item.object_type, 0) + 1
+        job.current_step = f"{verb} {label} ({next_index}/{type_totals[item.object_type]})"
+        db.commit()
         _check_cancelled(db, job, counter)
         if item.planned_action == "create":
             batch = db.execute(
@@ -326,6 +341,9 @@ def _execute_pending_items(
             ):
                 _refresh_live_totals(db, job)
                 return
+            type_done[item.object_type] = type_done.get(item.object_type, 0) + len(contiguous)
+            job.current_step = f"Creating {label} ({type_done[item.object_type]}/{type_totals[item.object_type]})"
+            db.commit()
             _refresh_live_totals(db, job)
             continue
         try:
@@ -338,6 +356,7 @@ def _execute_pending_items(
             if fail_fast:
                 _refresh_live_totals(db, job)
                 return
+        type_done[item.object_type] = type_done.get(item.object_type, 0) + 1
         _refresh_live_totals(db, job)
 
 
@@ -351,6 +370,9 @@ def _execute_pending_patches(
     fail_fast: bool,
 ) -> None:
     counter = 0
+    total = len(db.execute(select(MigrationJobPatch.id).where(
+        MigrationJobPatch.job_id == job.id, MigrationJobPatch.execution_status == "pending",
+    )).all())
     while True:
         patch = db.execute(
             select(MigrationJobPatch)
@@ -362,6 +384,8 @@ def _execute_pending_patches(
             _refresh_live_totals(db, job)
             return
         counter += 1
+        job.current_step = f"Applying deferred patches ({counter}/{total})"
+        db.commit()
         _check_cancelled(db, job, counter)
 
         type_spec = registry[patch.object_type]
@@ -427,9 +451,9 @@ def _apply_marker_tag(
     recomputes each object's full, exact tag list every time, so re-applying
     is a no-op in effect) but not incremental: a resumed job re-examines
     every created object again rather than picking up only the untagged
-    remainder. Accepted as a reasonable trade-off given how cheap and side-
-    effect-free re-checking an already-tagged object is, versus the added
-    complexity of a fully tracked fourth execution phase.
+    remainder. Updates are grouped by object type and sent in bulk, avoiding
+    pynetbox's normal GET-before-PATCH behavior for every individual object.
+    Reapplying the same exact tag list remains idempotent.
     """
     tag_type = registry[UNIVERSAL_TAG_TYPE]
     tag_endpoint = resolve_endpoint(target_client.nb, tag_type.endpoint)
@@ -450,6 +474,7 @@ def _apply_marker_tag(
             MigrationJobItem.object_type != UNIVERSAL_TAG_TYPE,  # don't tag the tags themselves
         )
     ).scalars().all()
+    updates_by_type: dict[str, list[dict[str, Any]]] = {}
     for item in created_items:
         type_spec = registry[item.object_type]
         fk_refs = json.loads(item.fk_refs_json)
@@ -459,11 +484,26 @@ def _apply_marker_tag(
         existing_tags = resolved_fk.get(UNIVERSAL_TAG_FIELD) or []
         if marker_tag_id in existing_tags:
             continue
-        endpoint = resolve_endpoint(target_client.nb, type_spec.endpoint)
-        try:
-            target_client.update_by_id(endpoint, item.target_id, {UNIVERSAL_TAG_FIELD: [*existing_tags, marker_tag_id]})
-        except MigrationApiError:
-            pass  # best-effort — a tagging failure must never fail the migration itself
+        updates_by_type.setdefault(item.object_type, []).append({
+            "id": item.target_id,
+            UNIVERSAL_TAG_FIELD: [*existing_tags, marker_tag_id],
+        })
+
+    total = sum(len(updates) for updates in updates_by_type.values())
+    completed = 0
+    for object_type, updates in updates_by_type.items():
+        endpoint = resolve_endpoint(target_client.nb, registry[object_type].endpoint)
+        for offset in range(0, len(updates), BULK_CREATE_SIZE):
+            batch = updates[offset:offset + BULK_CREATE_SIZE]
+            job.current_step = f"Applying marker tag ({completed}/{total})"
+            db.commit()
+            try:
+                target_client.update_many(endpoint, batch)
+            except MigrationApiError:
+                pass  # best-effort — a tagging failure must never fail the migration itself
+            completed += len(batch)
+            job.current_step = f"Applying marker tag ({completed}/{total})"
+            db.commit()
 
 
 def execute_job(
@@ -486,6 +526,7 @@ def execute_job(
     if job.status not in ("planned", "running"):
         return  # already terminal — never re-execute a completed/failed/cancelled job by accident
     job.status = "running"
+    job.current_step = "Preparing migration execution"
     if job.started_at is None:
         job.started_at = datetime.utcnow()
     db.commit()
@@ -528,6 +569,8 @@ def execute_job(
                     # target rejects tag creation) is recorded as a warning and the job still
                     # completes normally.
                     try:
+                        job.current_step = "Applying marker tag"
+                        db.commit()
                         _apply_marker_tag(db, job, registry=registry, target_client=target_client, id_map=id_map, tag_slug=marker_tag_slug)
                     except Exception as exc:  # noqa: BLE001 — see comment above
                         warnings = json.loads(job.warnings_json or "[]")
@@ -537,6 +580,7 @@ def execute_job(
     except JobCancelled:
         _refresh_live_totals(db, job)
         job.status = "cancelled"
+        job.current_step = "Cancelled"
         job.finished_at = datetime.utcnow()
         db.commit()
         _send_completion_audit(job)
@@ -550,6 +594,7 @@ def execute_job(
 
     _refresh_live_totals(db, job)
     job.status = "completed_with_errors" if any_errors else "completed"
+    job.current_step = "Completed with errors" if any_errors else "Completed"
     job.finished_at = datetime.utcnow()
     db.commit()
     _send_completion_audit(job)

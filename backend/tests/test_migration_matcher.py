@@ -4,6 +4,7 @@ from app.services.migration.matcher import (
     MappingOverride,
     MatchOutcome,
     match_object,
+    natural_key_label,
 )
 from app.services.migration.registry import load_registry
 
@@ -32,6 +33,19 @@ class FakeTargetLookup:
 
 
 REGISTRY = load_registry()
+
+
+def test_component_labels_include_device_and_module_context():
+    interface = {"name": "eth0", "device": {"name": "router-01"}}
+    module = {
+        "device": {"name": "router-01"},
+        "module_bay": {"name": "Bay 1"},
+        "module_type": {"model": "Line Card 4x10G"},
+    }
+    assert natural_key_label(interface, type_spec=REGISTRY["dcim.interface"]) == "router-01 · eth0"
+    assert natural_key_label(module, type_spec=REGISTRY["dcim.module"]) == (
+        "router-01 · Bay 1 · Line Card 4x10G"
+    )
 
 
 def test_explicit_mapping_map_short_circuits_everything():
@@ -67,13 +81,35 @@ def test_explicit_mapping_create_bypasses_auto_match():
 
 def test_auto_match_by_slug():
     lookup = FakeTargetLookup()
-    lookup.add("dcim.site", {"slug": "ams-1"}, {"id": 5})
+    lookup.add("dcim.site", {"slug": "ams-1"}, {"id": 5, "slug": "ams-1"})
     result = match_object(
         REGISTRY["dcim.site"], {"slug": "ams-1", "name": "Amsterdam 1"},
         registry=REGISTRY, id_map=IdMap(), target_lookup=lookup, override=None,
     )
     assert result.outcome == MatchOutcome.MATCHED
     assert result.target_id == 5
+    assert result.target_natural_key == "ams-1"
+
+
+def test_auto_match_without_a_readable_label_keeps_id_fallback_available():
+    lookup = FakeTargetLookup()
+    lookup.add("dcim.site", {"slug": "ams-1"}, {"id": 5})
+    result = match_object(
+        REGISTRY["dcim.site"], {"slug": "ams-1"}, registry=REGISTRY,
+        id_map=IdMap(), target_lookup=lookup, override=None,
+    )
+    assert result.target_id == 5
+    assert result.target_natural_key is None
+
+
+def test_auto_match_uses_netbox_display_when_canonical_label_fields_are_absent():
+    lookup = FakeTargetLookup()
+    lookup.add("dcim.site", {"slug": "ams-1"}, {"id": 5, "display": "Amsterdam Campus"})
+    result = match_object(
+        REGISTRY["dcim.site"], {"slug": "ams-1"}, registry=REGISTRY,
+        id_map=IdMap(), target_lookup=lookup, override=None,
+    )
+    assert result.target_natural_key == "Amsterdam Campus"
 
 
 def test_no_match_means_create():
@@ -144,6 +180,22 @@ def test_devicetype_ambiguous_when_part_number_and_model_disagree():
     )
     assert result.outcome == MatchOutcome.AMBIGUOUS
     assert "500" in result.detail and "600" in result.detail
+
+
+def test_ambiguous_match_detail_includes_candidate_labels_and_ids():
+    id_map = IdMap()
+    id_map.put("dcim.manufacturer", 7, 70)
+    lookup = FakeTargetLookup()
+    lookup.add("dcim.devicetype", {"manufacturer_id": 70, "part_number": "P1"}, {"id": 500, "model": "Model One"})
+    lookup.add("dcim.devicetype", {"manufacturer_id": 70, "model": "Source Model"}, {"id": 600, "model": "Model Two"})
+    result = match_object(
+        REGISTRY["dcim.devicetype"],
+        {"manufacturer": {"id": 7}, "part_number": "P1", "model": "Source Model"},
+        registry=REGISTRY, id_map=id_map, target_lookup=lookup, override=None,
+    )
+    assert result.outcome == MatchOutcome.AMBIGUOUS
+    assert "Model One (#500)" in result.detail
+    assert "Model Two (#600)" in result.detail
 
 
 def test_devicetype_agreeing_strategies_are_not_ambiguous():

@@ -16,7 +16,7 @@ RESOURCE_TYPES = ("*", "instance", "github_target")
 
 # MigrationJob.status
 MIGRATION_JOB_STATUSES = (
-    "planned", "running", "completed", "completed_with_errors", "failed", "cancelled",
+    "planning", "planned", "running", "completed", "completed_with_errors", "failed", "cancelled",
     "rolling_back", "rolled_back", "rolled_back_with_errors",
 )
 # MigrationJob.phase
@@ -160,6 +160,7 @@ class MigrationJob(Base):
     status: Mapped[str] = mapped_column(String(32), default="planned")
     phase: Mapped[str] = mapped_column(String(16), default="primary")
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    current_step: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     totals_json: Mapped[str] = mapped_column(Text, default="{}")  # per-type create/update/map/skip/error counts, refreshed as it runs
     warnings_json: Mapped[str] = mapped_column(Text, default="[]")  # list[str], collected at plan time (dropped custom fields, version notes, ...)
@@ -224,6 +225,7 @@ class MigrationJobItem(Base):
     dropped_custom_fields_json: Mapped[str] = mapped_column(Text, default="[]")  # list[str], for the report's warnings
 
     target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # known immediately for map; filled in on create
+    target_natural_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     execution_status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/done/error/rolled_back/rollback_error
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

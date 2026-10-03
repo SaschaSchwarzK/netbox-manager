@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
@@ -79,7 +80,7 @@ def _job_summary(db: Session, job: models.MigrationJob) -> schemas.MigrationJobS
     return schemas.MigrationJobSummary(
         id=job.id, source_instance_id=job.source_instance_id, target_instance_id=job.target_instance_id,
         source_instance_name=source.name if source else None, target_instance_name=target.name if target else None,
-        status=job.status, phase=job.phase,
+        status=job.status, phase=job.phase, current_step=job.current_step,
         tenant_filter=json.loads(job.tenant_filter_json), selected_types=json.loads(job.selected_types_json),
         totals=json.loads(job.totals_json), warnings=json.loads(job.warnings_json),
         created_at=job.created_at, started_at=job.started_at, last_heartbeat_at=job.last_heartbeat_at,
@@ -146,50 +147,31 @@ def plan_migration(
     if unknown:
         raise HTTPException(400, f"Unknown or non-selectable type(s): {sorted(unknown)}")
 
-    source_instance = _get_instance_or_404(db, payload.source_instance_id)
-    target_instance = _get_instance_or_404(db, payload.target_instance_id)
-    try:
-        source_version_result, _, version_warnings = check_migration_version_compatibility(
-            source_instance.base_url, crypto.decrypt(source_instance.api_token_encrypted), source_instance.verify_ssl,
-            target_instance.base_url, crypto.decrypt(target_instance.api_token_encrypted), target_instance.verify_ssl,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-    source_client, target_client = _build_clients(
-        db, payload.source_instance_id, payload.target_instance_id, payload.max_requests_per_second,
-    )
-    mapping_overrides = _decode_mapping_overrides(payload.mapping_overrides)
-
-    try:
-        plan = build_plan(
-            registry=registry, source_client=source_client, target_client=target_client,
-            selected_types=set(payload.selected_types), tenant_filter=payload.tenant_filter,
-            mapping_overrides=mapping_overrides, conflict_policy=payload.conflict_policy,
-            include_untenanted=payload.include_untenanted,
-            source_netbox_version=source_version_result.get("netbox_version"),
-        )
-    except registry_mod.MigrationRegistryError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    plan.warnings.extend(version_warnings)
+    _get_instance_or_404(db, payload.source_instance_id)
+    _get_instance_or_404(db, payload.target_instance_id)
+    # Validate the user-supplied mapping syntax before returning an accepted job;
+    # all network and planning work happens in the worker below.
+    _decode_mapping_overrides(payload.mapping_overrides)
 
     if payload.job_id:
         job = db.get(models.MigrationJob, payload.job_id)
         if job is None:
             raise HTTPException(404, "Migration job not found.")
-        if job.status != "planned":
-            raise HTTPException(409, f"Cannot re-plan a job in status={job.status!r}; only a freshly planned job can be edited.")
+        if (job.source_instance_id, job.target_instance_id) != (payload.source_instance_id, payload.target_instance_id):
+            raise HTTPException(400, "A re-plan must keep the original source and target instances.")
+        if job.status != "planned" and not (job.status == "failed" and job.started_at is None):
+            raise HTTPException(409, f"Cannot re-plan a job in status={job.status!r}; only a plan that has not executed can be edited.")
     else:
         job = models.MigrationJob(
             source_instance_id=payload.source_instance_id, target_instance_id=payload.target_instance_id,
             actor_sub=actor.get("sub"), actor_name=actor.get("name"), actor_email=actor.get("email"),
-            status="planned",
+            status="planning",
         )
         db.add(job)
 
     job.tenant_filter_json = json.dumps(payload.tenant_filter)
     job.selected_types_json = json.dumps(payload.selected_types)
-    job.resolved_types_json = json.dumps(plan.resolved_types)
+    job.resolved_types_json = "[]"
     job.conflict_policy_json = json.dumps(payload.conflict_policy)
     job.mapping_json = json.dumps({k: v.model_dump() for k, v in payload.mapping_overrides.items()})
     job.options_json = json.dumps({
@@ -197,15 +179,83 @@ def plan_migration(
         "fail_fast": payload.fail_fast,
         "max_requests_per_second": payload.max_requests_per_second,
     })
-    job.totals_json = json.dumps(plan.totals)
-    job.warnings_json = json.dumps(plan.warnings)
-    job.status = "planned"
+    job.totals_json = "{}"
+    job.warnings_json = "[]"
+    job.status = "planning"
     job.phase = "primary"
+    job.current_step = "Starting planning"
+    job.finished_at = None
     db.commit()
     db.refresh(job)
 
-    persist_plan(db, job.id, plan)
-    return _job_summary(db, job)
+    summary = _job_summary(db, job)
+    thread = threading.Thread(target=_run_plan_in_background, args=(job.id,), daemon=True)
+    thread.start()
+    return summary
+
+
+def _run_plan_in_background(job_id: str) -> None:
+    """Build and persist a plan with its own DB session, surfacing failures on the job."""
+    db = SessionLocal()
+    try:
+        job = db.get(models.MigrationJob, job_id)
+        if job is None or job.status != "planning":
+            return
+
+        def update_progress(message: str) -> None:
+            job.current_step = message
+            job.last_heartbeat_at = datetime.utcnow()
+            db.commit()
+
+        update_progress("Checking NetBox version compatibility")
+        source_instance = _get_instance_or_404(db, job.source_instance_id)
+        target_instance = _get_instance_or_404(db, job.target_instance_id)
+        source_version_result, _, version_warnings = check_migration_version_compatibility(
+            source_instance.base_url, crypto.decrypt(source_instance.api_token_encrypted), source_instance.verify_ssl,
+            target_instance.base_url, crypto.decrypt(target_instance.api_token_encrypted), target_instance.verify_ssl,
+        )
+        options = json.loads(job.options_json or "{}")
+        source_client, target_client = _build_clients(
+            db, job.source_instance_id, job.target_instance_id,
+            options.get("max_requests_per_second", 4.0),
+        )
+        raw_mapping = json.loads(job.mapping_json or "{}")
+        mapping_overrides = {
+            tuple_key: MappingOverride(action=MappingAction(value["action"]), target_id=value.get("target_id"))
+            for key, value in raw_mapping.items()
+            for tuple_key in [(key.rsplit(":", 1)[0], int(key.rsplit(":", 1)[1]))]
+        }
+        plan = build_plan(
+            registry=registry_mod.load_registry(), source_client=source_client, target_client=target_client,
+            selected_types=set(json.loads(job.selected_types_json)),
+            tenant_filter=json.loads(job.tenant_filter_json), mapping_overrides=mapping_overrides,
+            conflict_policy=json.loads(job.conflict_policy_json or "{}"),
+            include_untenanted=bool(options.get("include_untenanted", False)),
+            source_netbox_version=source_version_result.get("netbox_version"), progress=update_progress,
+        )
+        plan.warnings.extend(version_warnings)
+        update_progress("Saving migration plan")
+        persist_plan(db, job.id, plan)
+        job.resolved_types_json = json.dumps(plan.resolved_types)
+        job.totals_json = json.dumps(plan.totals)
+        job.warnings_json = json.dumps(plan.warnings)
+        job.status = "planned"
+        job.current_step = "Planning complete"
+        job.last_heartbeat_at = datetime.utcnow()
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 - no request exists to receive worker failures
+        db.rollback()
+        job = db.get(models.MigrationJob, job_id)
+        if job is not None:
+            job.status = "failed"
+            job.current_step = f"Planning failed: {exc}"
+            job.warnings_json = json.dumps([*json.loads(job.warnings_json or "[]"), str(exc)])
+            job.finished_at = datetime.utcnow()
+            db.commit()
+        import logging
+        logging.getLogger(__name__).exception("Migration planning job %s failed", job_id)
+    finally:
+        db.close()
 
 
 @router.post("/preflight", response_model=schemas.MigrationPreflightResponse)
@@ -267,6 +317,8 @@ def get_mapping_skeleton(
     job = db.get(models.MigrationJob, job_id)
     if job is None:
         raise HTTPException(404, "Migration job not found.")
+    if job.status == "planning":
+        raise HTTPException(409, "The mapping skeleton is not available until planning has finished.")
     _require_job_visibility(job, ctx, db)
     registry = registry_mod.load_registry()
     items = (
@@ -325,6 +377,8 @@ def execute_migration(
     job = db.get(models.MigrationJob, job_id)
     if job is None:
         raise HTTPException(404, "Migration job not found.")
+    if job.status == "planning":
+        raise HTTPException(409, "The job is still being planned and cannot be executed yet.")
     require_resource_admin(ctx, "instance", job.target_instance_id, db)
     if job.status not in ("planned",):
         raise HTTPException(409, f"Job is in status={job.status!r}; only a freshly planned job can be started this way.")
@@ -490,6 +544,8 @@ def get_report(
     job = db.get(models.MigrationJob, job_id)
     if job is None:
         raise HTTPException(404, "Migration job not found.")
+    if job.status == "planning":
+        raise HTTPException(409, "The report is not available until planning has finished.")
     # Reports expose per-object source/target IDs and links, so both instances must be visible.
     _require_job_visibility(job, _, db)
     registry = registry_mod.load_registry()
