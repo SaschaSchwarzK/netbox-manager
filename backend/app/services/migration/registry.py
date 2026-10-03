@@ -156,6 +156,47 @@ class Registry:
     def in_scope_types(self) -> dict[str, TypeSpec]:
         return {k: v for k, v in self.types.items() if not v.out_of_scope}
 
+    def selectable_dependency_relationships(self, type_key: str) -> tuple[list[str], list[str]]:
+        """
+        Return the selectable types transitively reached from ``type_key`` as
+        ``(required, possible_optional)``. Required paths contain only
+        required edges; possible-optional paths contain at least one optional
+        edge. Non-selectable types are traversed but omitted from both lists.
+        """
+        if type_key not in self.types:
+            raise MigrationRegistryError(f"Unknown type: {type_key!r}")
+
+        required: set[str] = set()
+        possible_optional: set[str] = set()
+        visited: set[tuple[str, bool]] = set()
+        frontier = [(type_key, False)]
+        while frontier:
+            key, optional_path = frontier.pop()
+            state = (key, optional_path)
+            if state in visited:
+                continue
+            visited.add(state)
+            spec = self.types[key]
+            for dependency in spec.dependencies:
+                frontier.append((dependency, optional_path))
+            for dependency in spec.optional_dependencies:
+                frontier.append((dependency, True))
+            if key == type_key or not spec.selectable or spec.out_of_scope:
+                continue
+            if optional_path:
+                possible_optional.add(key)
+            else:
+                required.add(key)
+
+        # If a type is reachable by both kinds of path, it is guaranteed and
+        # should not also be described as merely possible.
+        possible_optional -= required
+        order = {key: index for index, key in enumerate(self.topological_order)}
+        return (
+            sorted(required, key=order.__getitem__),
+            sorted(possible_optional, key=order.__getitem__),
+        )
+
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     try:

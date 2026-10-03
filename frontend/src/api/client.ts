@@ -687,6 +687,8 @@ export interface MigrationType {
   label: string;
   dependencies: string[];
   optional_dependencies: string[];
+  required_selectable_dependencies: string[];
+  possible_optional_selectable_dependencies: string[];
 }
 
 export interface MigrationTenant {

@@ -123,12 +123,31 @@ export default function MigrationPage() {
     return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
   }, [job?.id, job?.status]);
 
-  const toggleType = (type: string) => {
-    setSelectedTypes((prev) => {
-      const next = new Set(prev);
-      if (next.has(type)) next.delete(type); else next.add(type);
-      return next;
+  const typeByKey = new Map(types.map((type) => [type.type, type]));
+  const requiredBy = new Map<string, string[]>();
+  selectedTypes.forEach((selectedType) => {
+    typeByKey.get(selectedType)?.required_selectable_dependencies.forEach((dependency) => {
+      const dependents = requiredBy.get(dependency) ?? [];
+      dependents.push(selectedType);
+      requiredBy.set(dependency, dependents);
     });
+  });
+  const autoIncludedTypes = new Set(requiredBy.keys());
+
+  const toggleType = (type: string) => {
+    const next = new Set(selectedTypes);
+    if (next.has(type)) {
+      next.delete(type);
+      const dependents = requiredBy.get(type);
+      if (dependents?.length) {
+        const label = typeByKey.get(type)?.label ?? type;
+        const dependentLabels = dependents.map((key) => typeByKey.get(key)?.label ?? key);
+        setNotice({ kind: "warning", text: `${label} remains selected because it is required by ${dependentLabels.join(", ")}.` });
+      }
+    } else {
+      next.add(type);
+    }
+    setSelectedTypes(next);
   };
 
   const resetWizard = () => {
@@ -373,13 +392,23 @@ export default function MigrationPage() {
               <h3>{namespace}</h3>
               <div className="content-type-grid">
                 {group.map((t) => {
-                  const selected = selectedTypes.has(t.type);
-                  return <div className="migration-type-option" key={t.type} title={t.dependencies.length ? `Requires: ${t.dependencies.join(", ")}` : undefined}>
+                  const manuallySelected = selectedTypes.has(t.type);
+                  const autoIncluded = autoIncludedTypes.has(t.type);
+                  const selected = manuallySelected || autoIncluded;
+                  const dependentLabels = (requiredBy.get(t.type) ?? []).map((key) => typeByKey.get(key)?.label ?? key);
+                  const optionalLabels = t.possible_optional_selectable_dependencies.map((key) => typeByKey.get(key)?.label ?? key);
+                  return <div className={`migration-type-option${autoIncluded && !manuallySelected ? " dependency-required" : ""}`} key={t.type}>
                     <label>
-                      <input type="checkbox" checked={selected} onChange={() => toggleType(t.type)} />
+                      <input type="checkbox" checked={selected} disabled={autoIncluded && !manuallySelected} onChange={() => toggleType(t.type)} />
                       <span>{t.label}</span>
                     </label>
-                    {selected && <select aria-label={`${t.label} conflict policy override`}
+                    {autoIncluded && <div className="migration-dependency-note" title={`Required by: ${dependentLabels.join(", ")}`}>
+                      Required by: {dependentLabels.join(", ")}
+                    </div>}
+                    {selected && optionalLabels.length > 0 && <div className="migration-optional-note">
+                      May also include: {optionalLabels.join(", ")} (if referenced)
+                    </div>}
+                    {manuallySelected && <select aria-label={`${t.label} conflict policy override`}
                       value={conflictOverrides[t.type] ?? ""}
                       onChange={(e) => setConflictOverrides((previous) => {
                         const next = { ...previous };

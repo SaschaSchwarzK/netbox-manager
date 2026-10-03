@@ -97,15 +97,22 @@ def _require_job_visibility(job: models.MigrationJob, ctx: AccessContext, db: Se
 
 @router.get("/types")
 def list_types(_: AccessContext = Depends(require_role("viewer"))):
-    """The registry's selectable types plus a short human label, for the type-selection step of the wizard."""
+    """Selectable types and their UI-visible transitive dependency relationships."""
     from app.services.migration.report import display_name
 
     registry = registry_mod.load_registry()
-    return [
-        {"type": key, "label": display_name(key), "dependencies": list(registry[key].dependencies),
-         "optional_dependencies": list(registry[key].optional_dependencies)}
-        for key in registry.selectable_types()
-    ]
+    result = []
+    for key in registry.selectable_types():
+        required, possible_optional = registry.selectable_dependency_relationships(key)
+        result.append({
+            "type": key,
+            "label": display_name(key),
+            "dependencies": list(registry[key].dependencies),
+            "optional_dependencies": list(registry[key].optional_dependencies),
+            "required_selectable_dependencies": required,
+            "possible_optional_selectable_dependencies": possible_optional,
+        })
+    return result
 
 
 @router.get("/instances/{instance_id}/tenants")

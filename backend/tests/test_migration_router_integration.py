@@ -68,6 +68,22 @@ def _empty_list(url):
     responses.get(url, json={"count": 0, "next": None, "previous": None, "results": []})
 
 
+def test_list_types_exposes_selectable_dependency_closures():
+    rows = migrations.list_types(_admin_ctx())
+    by_type = {row["type"]: row for row in rows}
+
+    interface = by_type["dcim.interface"]
+    assert "dcim.device" in interface["required_selectable_dependencies"]
+    assert "dcim.site" not in interface["required_selectable_dependencies"]
+    assert "dcim.devicetype" not in interface["required_selectable_dependencies"]
+
+    # VRFs have no required selectable dependency. Optional dependencies that
+    # are themselves non-selectable are traversed without causing an error.
+    assert by_type["ipam.vrf"]["required_selectable_dependencies"] == []
+    assert by_type["ipam.vrf"]["possible_optional_selectable_dependencies"] == []
+    assert "ipam.vrf" in by_type["ipam.prefix"]["possible_optional_selectable_dependencies"]
+
+
 @responses.activate
 def test_list_instance_tenants_uses_read_only_paginated_migration_client(db, instances):
     source, _ = instances
