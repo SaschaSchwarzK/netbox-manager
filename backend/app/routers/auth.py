@@ -60,6 +60,7 @@ async def callback(request: Request, db: Session = Depends(get_db)):
         "sub": userinfo.get("sub"),
         "email": userinfo.get("email"),
         "name": userinfo.get("name") or userinfo.get("preferred_username") or userinfo.get("email") or userinfo.get("sub"),
+        "username": userinfo.get("preferred_username"),
         "groups": groups,
     }
 

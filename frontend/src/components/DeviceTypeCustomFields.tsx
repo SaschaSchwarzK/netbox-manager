@@ -7,7 +7,7 @@ interface CustomFieldDef {
   name: string;
   label?: string | null;
   type: string;
-  content_types: string[];
+  object_types: string[];
   description?: string | null;
   required?: boolean;
   default?: any;
@@ -142,7 +142,7 @@ export default function DeviceTypeCustomFields({ targetId, values, onChange }: P
     customFieldsApi.get(targetId).then((file) => {
       if (cancelled) return;
       const all = (file.payload.custom_fields ?? []) as CustomFieldDef[];
-      setFields(all.filter((f) => (f.content_types ?? []).includes(DEVICE_TYPE_CONTENT_TYPE)));
+      setFields(all.filter((f) => (f.object_types ?? []).includes(DEVICE_TYPE_CONTENT_TYPE)));
       const csMap: Record<string, ChoiceSetDef> = {};
       ((file.payload.custom_field_choice_sets ?? []) as ChoiceSetDef[]).forEach((cs) => { csMap[cs.name] = cs; });
       setChoiceSets(csMap);

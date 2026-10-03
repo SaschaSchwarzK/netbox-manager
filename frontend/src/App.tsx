@@ -12,6 +12,7 @@ import AuditLogPage from "./pages/AuditLogPage";
 import SyslogPage from "./pages/SyslogPage";
 import FleetPage from "./pages/FleetPage";
 import AccessControlPage from "./pages/AccessControlPage";
+import TenantPermissionsPage from "./pages/TenantPermissionsPage";
 import LoginScreen from "./pages/LoginScreen";
 import { authApi, AuthMeResponse } from "./api/client";
 import { AccessContext, makeAccessValue } from "./contexts/AccessContext";
@@ -65,6 +66,9 @@ export default function App() {
             <NavLink to="/custom-fields" className={({ isActive }) => (isActive ? "active" : "")}>
               Custom Fields
             </NavLink>
+            <NavLink to="/tenant-permissions" className={({ isActive }) => (isActive ? "active" : "")}>
+              Tenant Permissions
+            </NavLink>
             <NavLink to="/bulk-import" className={({ isActive }) => (isActive ? "active" : "")}>
               Bulk Import
             </NavLink>
@@ -110,6 +114,7 @@ export default function App() {
             <Route path="/device-types" element={<DeviceTypesPage />} />
             <Route path="/device-types/:targetId/edit" element={<DeviceTypeEditorPage />} />
             <Route path="/custom-fields" element={<CustomFieldsPage />} />
+            <Route path="/tenant-permissions" element={<TenantPermissionsPage />} />
             <Route path="/bulk-import" element={<BulkImportPage />} />
             <Route path="/drift" element={<DriftPage />} />
             <Route path="/audit" element={<AuditLogPage />} />

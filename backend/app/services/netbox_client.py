@@ -1,10 +1,11 @@
 import time
+import re
 from typing import Any
 
 import pynetbox
 import requests
 
-from app.devicetype_schema import COMPONENT_ENDPOINTS, COMPONENT_EXTRA_FIELDS
+from app.devicetype_schema import COMPONENT_ENDPOINTS, COMPONENT_EXTRA_FIELDS, DeviceType
 
 
 def get_client(base_url: str, token: str, verify_ssl: bool) -> pynetbox.api:
@@ -25,7 +26,13 @@ def test_connection(base_url: str, token: str, verify_ssl: bool) -> dict[str, An
         )
         if resp.status_code == 200:
             data = resp.json()
-            return {"ok": True, "netbox_version": data.get("netbox-version"), "detail": None}
+            version = data.get("netbox-version")
+            parsed = _parse_netbox_version(version)
+            if parsed is None:
+                return {"ok": False, "netbox_version": version, "detail": f"Could not parse NetBox version {version!r}; NetBox >= 4.6.8 is required."}
+            if parsed < MIN_CUSTOM_FIELDS_VERSION:
+                return {"ok": False, "netbox_version": version, "detail": f"NetBox {version} is unsupported; NetBox >= 4.6.8 is required."}
+            return {"ok": True, "netbox_version": version, "detail": None}
         return {
             "ok": False,
             "netbox_version": None,
@@ -33,6 +40,30 @@ def test_connection(base_url: str, token: str, verify_ssl: bool) -> dict[str, An
         }
     except requests.RequestException as exc:
         return {"ok": False, "netbox_version": None, "detail": str(exc)}
+
+
+MIN_CUSTOM_FIELDS_VERSION = (4, 6, 8)
+
+
+def _parse_netbox_version(version: Any) -> tuple[int, int, int] | None:
+    match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?", str(version or ""))
+    return tuple(int(part or 0) for part in match.groups()) if match else None
+
+
+def require_custom_fields_version(base_url: str, token: str, verify_ssl: bool) -> str:
+    """Fail clearly unless the instance meets the supported NetBox floor."""
+    result = test_connection(base_url, token, verify_ssl)
+    if not result["ok"]:
+        raise RuntimeError(f"Could not verify NetBox version: {result['detail']}")
+    version = str(result.get("netbox_version") or "")
+    parsed = _parse_netbox_version(version)
+    if parsed is None:
+        raise RuntimeError(f"Could not parse NetBox version {version!r}; NetBox >= 4.6.8 is required.")
+    if parsed < MIN_CUSTOM_FIELDS_VERSION:
+        raise RuntimeError(
+            f"NetBox {version} is unsupported; NetBox >= 4.6.8 is required."
+        )
+    return version
 
 
 def search_instance(base_url: str, token: str, verify_ssl: bool, query: str) -> dict[str, Any]:
@@ -218,8 +249,9 @@ def list_device_types_on_instance(base_url: str, token: str, verify_ssl: bool) -
     for dt in nb.dcim.device_types.all():
         results.append({
             "manufacturer": str(dt.manufacturer),
-            "model": dt.model,
-            "slug": dt.slug,
+            "model": str(dt.model),
+            "slug": str(dt.slug),
+            "part_number": str(dt.part_number) if getattr(dt, "part_number", None) is not None else None,
             "u_height": float(dt.u_height) if dt.u_height is not None else None,
         })
     return results
@@ -304,6 +336,9 @@ def push_device_type(    base_url: str,
     NetBox instance. `device_type` is expected in the hyphenated
     devicetype-library YAML shape (as produced by DeviceType.to_yaml_dict()).
     """
+    # Repository files use NetBox's cf_<name> bulk-import columns, whereas
+    # its REST API expects one nested custom_fields object.
+    device_type = DeviceType(**device_type).to_internal_dict()
     nb = get_client(base_url, token, verify_ssl)
 
     manufacturer_name = device_type["manufacturer"]

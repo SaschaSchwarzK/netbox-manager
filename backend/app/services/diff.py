@@ -4,6 +4,7 @@ current state of that device type on a NetBox instance. Used for both
 diff-before-push and scheduled drift detection, so the two features always
 agree on what "in sync" means.
 """
+from app.devicetype_schema import DeviceType
 from app.devicetype_schema import COMPONENT_ENDPOINTS
 
 BASE_FIELDS = [
@@ -22,8 +23,8 @@ def field_level_diff(source_item: dict, existing_item: dict) -> list[dict]:
     keys = (set(source_item.keys()) | set(existing_item.keys())) - {"name"}
     changes = []
     for key in sorted(keys):
-        source_value = _normalize(source_item.get(key))
-        existing_value = _normalize(existing_item.get(key))
+        source_value = _normalize_scope(key, source_item.get(key))
+        existing_value = _normalize_scope(key, existing_item.get(key))
         if source_value != existing_value:
             changes.append({"field": key, "source": source_item.get(key), "existing": existing_item.get(key)})
     return changes
@@ -35,6 +36,9 @@ def diff_payloads(source: dict, existing: dict | None) -> dict:
     as produced by netbox_client.get_existing_device_type(), or None if the
     device type doesn't exist on that instance at all.
     """
+    # Accept a raw NetBox-importable repository document as well as the
+    # normalized editor/API shape.
+    source = DeviceType(**source).to_internal_dict()
     if existing is None:
         return {"status": "missing", "base_field_changes": [], "component_changes": {}}
 
@@ -72,6 +76,13 @@ def _normalize(value):
     if value in (None, ""):
         return None
     return value
+
+
+def _normalize_scope(key: str, value):
+    normalized = _normalize(value)
+    if key == "object_types" and isinstance(normalized, list):
+        return sorted(normalized)
+    return normalized
 
 
 def diff_named_list(source_items: list[dict], existing_items: list[dict]) -> dict:

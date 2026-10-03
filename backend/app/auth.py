@@ -94,8 +94,13 @@ def get_current_actor(request) -> dict:
     """
     user = get_current_user_optional(request)
     if user:
-        return {"sub": user.get("sub"), "name": user.get("name"), "email": user.get("email")}
-    return {"sub": None, "name": "anonymous (auth disabled)", "email": None}
+        return {
+            "sub": user.get("sub"),
+            "name": user.get("name"),
+            "email": user.get("email"),
+            "username": user.get("username"),
+        }
+    return {"sub": None, "name": "anonymous (auth disabled)", "email": None, "username": None}
 
 
 # --- OIDC client ---

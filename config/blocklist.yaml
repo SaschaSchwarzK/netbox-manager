@@ -1,0 +1,19 @@
+# Object types that permission templates may NEVER reference, regardless
+# of actions or tenant_relation. validate_template() must hard-reject any
+# template touching these, before any other check runs.
+#
+# Rationale: these are the auth/RBAC/identity object types themselves.
+# Granting any CRUD on them via a tenant-scoped template would let a
+# tenant group escalate privileges (e.g. create its own Group with
+# broader permissions, mint API tokens, or edit other groups' Permissions).
+
+version: 1
+
+blocked_object_types:
+  - users.user
+  - users.group
+  - users.objectpermission
+  - users.token
+  - users.userconfig
+  - social_django.usersocialauth   # if SSO/OIDC-linked identity data is modeled here
+  - auth.permission                # Django's own permission model, distinct from NetBox's ObjectPermission

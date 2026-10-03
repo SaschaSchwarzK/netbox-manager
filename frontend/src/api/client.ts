@@ -171,6 +171,56 @@ export const githubApi = {
   ),
 };
 
+// ---------- Tenant permission automation ----------
+
+export interface PermissionTemplateSummary {
+  name: string;
+  version: string | number;
+  description: string;
+  path: string;
+}
+
+export interface ManagedTenant {
+  instance_id: string;
+  instance: string;
+  tenant_id: number;
+  tenant_name: string;
+  metadata: Record<string, any>;
+}
+
+export const tenantPermissionsApi = {
+  templates: (targetId: string) => request<PermissionTemplateSummary[]>(`/repos/${targetId}/tenant-permissions/templates`),
+  template: (targetId: string, name: string) => request<{ path: string; payload: Record<string, any> }>(
+    `/repos/${targetId}/tenant-permissions/templates/${encodeURIComponent(name)}`
+  ),
+  validate: (targetId: string, payload: Record<string, any>) => request<{ valid: boolean; normalized: Record<string, any> }>(
+    `/repos/${targetId}/tenant-permissions/validate`, { method: "POST", body: JSON.stringify({ payload }) }
+  ),
+  saveTemplate: (targetId: string, payload: Record<string, any>, previousName?: string) => request<any>(
+    `/repos/${targetId}/tenant-permissions/templates`, {
+      method: "PUT", body: JSON.stringify({ payload, previous_name: previousName || null }),
+    }
+  ),
+  tenants: (targetId: string) => request<ManagedTenant[]>(`/repos/${targetId}/tenant-permissions/tenants`),
+  availableTenants: (targetId: string, instanceId: string, query = "") => request<{ id: number; name: string }[]>(
+    `/repos/${targetId}/tenant-permissions/instances/${instanceId}/available-tenants?q=${encodeURIComponent(query)}`
+  ),
+  onboard: (targetId: string, data: Record<string, any>) => request<any>(
+    `/repos/${targetId}/tenant-permissions/onboard`, { method: "POST", body: JSON.stringify(data) }
+  ),
+  apply: (targetId: string, template: string) => request<any>(
+    `/repos/${targetId}/tenant-permissions/apply`, { method: "POST", body: JSON.stringify({ template }) }
+  ),
+  planApply: (targetId: string, template: string) => request<any>(
+    `/repos/${targetId}/tenant-permissions/apply/plan`, { method: "POST", body: JSON.stringify({ template }) }
+  ),
+  decommission: (targetId: string, instanceId: string, tenantId: number, force = false) => request<any>(
+    `/repos/${targetId}/tenant-permissions/decommission`, {
+      method: "POST", body: JSON.stringify({ instance_id: instanceId, tenant_id: tenantId, force }),
+    }
+  ),
+};
+
 // ---------- Device types (files inside a GitHub target repo) ----------
 
 export interface DeviceTypeSummary {
@@ -178,6 +228,7 @@ export interface DeviceTypeSummary {
   manufacturer?: string;
   model?: string;
   slug?: string;
+  part_number?: string | null;
 }
 
 export interface DeviceTypeFile {
@@ -283,12 +334,15 @@ export interface BulkImportScanEntry {
   path: string;
   manufacturer_guess?: string | null;
   slug_guess?: string | null;
+  model?: string | null;
+  part_number?: string | null;
 }
 
 export interface DeviceTypePreview {
   manufacturer?: string | null;
   model?: string | null;
   slug?: string | null;
+  part_number?: string | null;
   component_counts: Record<string, number>;
   custom_fields: Record<string, any>;
 }
@@ -345,12 +399,38 @@ export const bulkImportApi = {
   }),
 };
 
+export interface NdxSearchEntry {
+  vendor_slug: string;
+  vendor_name: string;
+  manufacturer: string;
+  model: string;
+  slug: string;
+  part_number?: string | null;
+  u_height?: number | null;
+  source?: string | null;
+}
+
+export const ndxApi = {
+  search: (targetId: string, query: string, limit = 200) => request<NdxSearchEntry[]>(
+    `/repos/${targetId}/device-types/ndx/search`, { method: "POST", body: JSON.stringify({ query, limit }) }
+  ),
+  preview: (targetId: string, vendor_slug: string, slug: string) => request<DeviceTypePreview>(
+    `/repos/${targetId}/device-types/ndx/preview`, { method: "POST", body: JSON.stringify({ vendor_slug, slug }) }
+  ),
+  import: (targetId: string, data: {
+    selections: { vendor_slug: string; slug: string }[]; pr_title?: string;
+  }) => request<BulkImportResult>(`/repos/${targetId}/device-types/ndx/import`, {
+    method: "POST", body: JSON.stringify(data),
+  }),
+};
+
 // ---------- Import device types from a NetBox instance into git ----------
 
 export interface ImportFromNetboxScanEntry {
   manufacturer: string;
   model: string;
   slug: string;
+  part_number?: string | null;
   u_height?: number | null;
 }
 
@@ -495,6 +575,7 @@ export interface CustomFieldsTemplateFile {
   path: string;
   exists: boolean;
   sha?: string | null;
+  // Custom fields use NetBox's canonical `object_types` key.
   payload: { custom_fields: Record<string, any>[]; custom_field_choice_sets: Record<string, any>[] };
   open_pr?: { number: number; url: string } | null;
 }
@@ -531,6 +612,34 @@ export interface InstanceCustomFieldsDiffResult {
   error?: string | null;
 }
 
+export interface ScopeTypePreview {
+  object_type: string;
+  raw_count: number;
+  meaningful_count: number;
+  sample: { id: number | string; display: string; url?: string | null; value: unknown }[];
+  counting_method: "cf_empty_filter" | "client_side_pagination";
+}
+
+export interface ScopeReductionPreview {
+  field_name: string;
+  current_object_types: string[];
+  proposed_object_types: string[];
+  removed_object_types: string[];
+  object_types: ScopeTypePreview[];
+}
+
+export interface InstanceScopePreview {
+  instance_id: string;
+  instance_name: string;
+  netbox_version?: string | null;
+  reductions: ScopeReductionPreview[];
+  confirmation_text: string;
+  backup_possible: boolean;
+  backup?: Record<string, any> | null;
+  confirmation_token?: string | null;
+  error?: string | null;
+}
+
 export const customFieldsApi = {
   get: (targetId: string) => request<CustomFieldsTemplateFile>(`/repos/${targetId}/custom-fields/file`),
 
@@ -548,10 +657,22 @@ export const customFieldsApi = {
     method: "POST", body: JSON.stringify(data),
   }),
 
-  push: (targetId: string, instance_ids: string[], tags: string[], overwrite: boolean) =>
-    request<{ target: string; status: string; detail?: string }[]>(`/repos/${targetId}/custom-fields/push`, {
-      method: "POST", body: JSON.stringify({ instance_ids, tags, overwrite }),
+  previewPush: (targetId: string, instance_ids: string[], tags: string[], overwrite: boolean, include_backup: boolean) =>
+    request<InstanceScopePreview[]>(`/repos/${targetId}/custom-fields/push/preview`, {
+      method: "POST", body: JSON.stringify({ instance_ids, tags, overwrite, include_backup }),
     }),
+
+  push: (targetId: string, instance_ids: string[], tags: string[], overwrite: boolean,
+    confirmations: Record<string, Record<string, any>> = {}) =>
+    request<{ target: string; status: string; detail?: string }[]>(`/repos/${targetId}/custom-fields/push`, {
+      method: "POST", body: JSON.stringify({ instance_ids, tags, overwrite, confirmations }),
+    }),
+
+  restore: (targetId: string, instance_id: string, backup: Record<string, any>, dry_run: boolean) =>
+    request<{ status: string; results: { object_type: string; record_id: number | string; status: string; detail?: string }[] }>(
+      `/repos/${targetId}/custom-fields/restore`, {
+        method: "POST", body: JSON.stringify({ instance_id, backup, dry_run }),
+      }),
 
   diff: (targetId: string, instance_ids: string[], tags: string[]) =>
     request<InstanceCustomFieldsDiffResult[]>(`/repos/${targetId}/custom-fields/diff`, {

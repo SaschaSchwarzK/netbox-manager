@@ -1,18 +1,69 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy.orm import Session
 
 from app import crypto, models, schemas
 from app.auth import get_current_actor
 from app.customfield_schema import CustomFieldsTemplate
 from app.database import get_db
+from app.config import settings
 from app.rbac import AccessContext, filter_scoped, get_access_context, has_role_at_least, require_role, role_for_resource
 from app.routers.device_types import _get_target, _github_error_to_http, _log_action, _resolve_instances, _with_actor_trailer
 from app.services import diff as diff_mod
 from app.services import github_repo, netbox_customfields
 
 router = APIRouter(prefix="/api/repos/{target_id}/custom-fields", tags=["custom-fields"])
+_scope_serializer = URLSafeTimedSerializer(settings.session_secret_key, salt="custom-field-scope-reduction")
+_SCOPE_TOKEN_MAX_AGE = 30 * 60
+
+
+def _normalized_template(payload: dict) -> dict:
+    """Accept legacy repository YAML and expose one canonical API shape."""
+    return CustomFieldsTemplate(**payload).to_yaml_dict()
+
+
+def _require_instance_admin(instances: list[models.NetboxInstance], ctx: AccessContext) -> None:
+    denied = [instance.name for instance in instances if not has_role_at_least(
+        role_for_resource(ctx, "instance", instance.id), "admin"
+    )]
+    if denied:
+        raise HTTPException(403, f"Instance admin role required for: {', '.join(denied)}")
+
+
+def _scope_preview_for_instance(instance, token: str, template: dict, actor: dict, include_backup: bool) -> dict:
+    preview = netbox_customfields.preview_scope_reductions(
+        instance.base_url, token, instance.verify_ssl, template,
+        instance={"id": instance.id, "name": instance.name, "base_url": instance.base_url},
+        actor=actor, include_backup=include_backup,
+    )
+    if preview["reductions"]:
+        preview["confirmation_token"] = _scope_serializer.dumps({
+            "instance_id": instance.id,
+            "fingerprint": netbox_customfields.scope_preview_fingerprint(preview),
+            "backup_requested": include_backup,
+        })
+    else:
+        preview["confirmation_token"] = None
+    return preview
+
+
+def _validate_scope_confirmation(instance_id: str, preview: dict, confirmation) -> dict:
+    try:
+        signed = _scope_serializer.loads(confirmation.token, max_age=_SCOPE_TOKEN_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        raise ValueError("Scope-reduction confirmation expired or is invalid; run preview again.")
+    if signed.get("instance_id") != instance_id or signed.get("fingerprint") != netbox_customfields.scope_preview_fingerprint(preview):
+        raise ValueError("Scope-reduction counts changed since preview; run preview again.")
+    if confirmation.typed_field_names != preview["confirmation_text"]:
+        raise ValueError(f"Type {preview['confirmation_text']!r} exactly to confirm the scope reduction.")
+    if signed.get("backup_requested"):
+        if not confirmation.backup_acknowledged:
+            raise ValueError("Download and acknowledge the backup before applying.")
+    elif confirmation.backup_opt_out_confirmation != f"NO BACKUP {preview['confirmation_text']}":
+        raise ValueError(f"Type 'NO BACKUP {preview['confirmation_text']}' exactly to apply without a backup.")
+    return signed
 
 
 @router.get("/file", response_model=schemas.CustomFieldsTemplateOut)
@@ -37,8 +88,12 @@ def get_template(target_id: str, db: Session = Depends(get_db), ctx: AccessConte
     except Exception as exc:
         raise _github_error_to_http(exc)
 
+    try:
+        normalized = _normalized_template(result["payload"])
+    except Exception as exc:
+        raise HTTPException(422, f"Repository custom-fields template is invalid: {exc}")
     return schemas.CustomFieldsTemplateOut(
-        repo_target_id=target_id, path=path, exists=True, sha=result["sha"], payload=result["payload"], open_pr=open_pr
+        repo_target_id=target_id, path=path, exists=True, sha=result["sha"], payload=normalized, open_pr=open_pr
     )
 
 
@@ -102,7 +157,7 @@ def import_scan(
     path = target.custom_fields_path
     try:
         template_exists = github_repo.file_exists(pat, target.repo, target.branch, path)
-        template = github_repo.get_file(pat, target.repo, target.branch, path)["payload"] if template_exists else CustomFieldsTemplate().to_yaml_dict()
+        template = _normalized_template(github_repo.get_file(pat, target.repo, target.branch, path)["payload"]) if template_exists else CustomFieldsTemplate().to_yaml_dict()
     except Exception as exc:
         raise _github_error_to_http(exc)
 
@@ -167,7 +222,7 @@ def import_from_instance(
         current = github_repo.get_file(pat, target.repo, target.branch, path) if template_exists else None
     except Exception as exc:
         raise _github_error_to_http(exc)
-    template = current["payload"] if current else CustomFieldsTemplate().to_yaml_dict()
+    template = _normalized_template(current["payload"]) if current else CustomFieldsTemplate().to_yaml_dict()
     sha = current["sha"] if current else None
 
     token = crypto.decrypt(instance.api_token_encrypted)
@@ -226,6 +281,81 @@ def import_from_instance(
     return schemas.SaveResult(**result)
 
 
+@router.post("/push/preview")
+def preview_push_to_instances(
+    target_id: str, payload: schemas.PreviewCustomFieldsPushRequest, request: Request,
+    db: Session = Depends(get_db), ctx: AccessContext = Depends(require_role("editor")),
+):
+    target = _get_target(target_id, db, ctx)
+    pat = crypto.decrypt(target.pat_encrypted)
+    actor = get_current_actor(request)
+    path = target.custom_fields_path
+    try:
+        template = _normalized_template(github_repo.get_file(pat, target.repo, target.branch, path)["payload"])
+    except Exception as exc:
+        raise _github_error_to_http(exc)
+    instances = _resolve_instances(db, payload.instance_ids, payload.tags, ctx)
+    if not instances:
+        raise HTTPException(400, "No matching NetBox instances (check instance_ids/tags).")
+    _require_instance_admin(instances, ctx)
+
+    results = []
+    for instance in instances:
+        token = crypto.decrypt(instance.api_token_encrypted)
+        try:
+            preview = _scope_preview_for_instance(
+                instance, token, template, actor, payload.include_backup and payload.overwrite
+            ) if payload.overwrite else {
+                "netbox_version": None, "reductions": [], "confirmation_text": "",
+                "backup_possible": True, "backup": None, "confirmation_token": None,
+            }
+            results.append({"instance_id": instance.id, "instance_name": instance.name, **preview})
+            counts = sum(row["meaningful_count"] for item in preview["reductions"] for row in item["object_types"])
+            _log_action(
+                db, repo_target_id=target_id, file_path=path, target_name=instance.name,
+                status="success", detail=f"Scope-reduction preview: {len(preview['reductions'])} field(s), {counts} meaningful value(s); backup={'yes' if preview['backup'] else 'no'}.", actor=actor,
+                action_type="netbox",
+            )
+        except Exception as exc:
+            results.append({"instance_id": instance.id, "instance_name": instance.name, "error": str(exc)})
+            _log_action(db, repo_target_id=target_id, file_path=path, target_name=instance.name,
+                        status="error", detail=f"Scope-reduction preview failed: {exc}", actor=actor,
+                        action_type="netbox")
+    return results
+
+
+@router.post("/restore")
+def restore_custom_fields(
+    target_id: str, payload: schemas.RestoreCustomFieldsRequest, request: Request,
+    db: Session = Depends(get_db), ctx: AccessContext = Depends(require_role("editor")),
+):
+    target = _get_target(target_id, db, ctx)
+    instance = db.get(models.NetboxInstance, payload.instance_id)
+    if not instance or not filter_scoped([instance], "instance", ctx, db):
+        raise HTTPException(404, "NetBox instance not found.")
+    _require_instance_admin([instance], ctx)
+    backup_instance = payload.backup.get("instance") or {}
+    if str(backup_instance.get("id")) != str(instance.id) or backup_instance.get("base_url", "").rstrip("/") != instance.base_url.rstrip("/"):
+        raise HTTPException(400, "Backup belongs to a different NetBox instance.")
+    actor = get_current_actor(request)
+    token = crypto.decrypt(instance.api_token_encrypted)
+    try:
+        result = netbox_customfields.restore_custom_fields_backup(
+            instance.base_url, token, instance.verify_ssl, payload.backup, dry_run=payload.dry_run
+        )
+    except Exception as exc:
+        _log_action(db, repo_target_id=target_id, file_path=target.custom_fields_path, target_name=instance.name,
+                    status="error", detail=f"Custom-field restore failed: {exc}", actor=actor,
+                    action_type="netbox")
+        raise HTTPException(400, str(exc))
+    errors = sum(item["status"] == "error" for item in result["results"])
+    _log_action(db, repo_target_id=target_id, file_path=target.custom_fields_path, target_name=instance.name,
+                status="error" if errors else "success",
+                detail=f"Custom-field restore {'dry run' if payload.dry_run else 'apply'}: {len(result['results'])} record(s), {errors} error(s).", actor=actor,
+                action_type="netbox")
+    return result
+
+
 @router.post("/push", response_model=list[schemas.PushResultItem])
 def push_to_instances(
     target_id: str, payload: schemas.PushCustomFieldsRequest, request: Request, db: Session = Depends(get_db),
@@ -237,13 +367,14 @@ def push_to_instances(
     path = target.custom_fields_path
 
     try:
-        template = github_repo.get_file(pat, target.repo, target.branch, path)["payload"]
+        template = _normalized_template(github_repo.get_file(pat, target.repo, target.branch, path)["payload"])
     except Exception as exc:
         raise _github_error_to_http(exc)
 
     instances = _resolve_instances(db, payload.instance_ids, payload.tags, ctx)
     if not instances:
         raise HTTPException(400, "No matching NetBox instances (check instance_ids/tags).")
+    _require_instance_admin(instances, ctx)
 
     results = []
     for instance in instances:
@@ -279,7 +410,22 @@ def push_to_instances(
 
         token = crypto.decrypt(instance.api_token_encrypted)
         try:
-            outcome = netbox_customfields.push_custom_fields(instance.base_url, token, instance.verify_ssl, template, payload.overwrite)
+            scope_reductions_confirmed = False
+            if payload.overwrite:
+                preview = _scope_preview_for_instance(instance, token, template, actor, include_backup=False)
+                if preview["reductions"]:
+                    confirmation = payload.confirmations.get(instance.id)
+                    if not confirmation:
+                        raise ValueError("Scope reduction detected. Preview and confirm this instance before applying.")
+                    signed = _validate_scope_confirmation(instance.id, preview, confirmation)
+                    scope_reductions_confirmed = True
+                    _log_action(db, repo_target_id=target_id, file_path=path, target_name=instance.name,
+                                status="success", detail=f"Confirmed scope reduction for {preview['confirmation_text']}; backup={'yes' if signed.get('backup_requested') else 'opted out'}.", actor=actor,
+                                action_type="netbox")
+            outcome = netbox_customfields.push_custom_fields(
+                instance.base_url, token, instance.verify_ssl, template, payload.overwrite,
+                scope_reductions_confirmed=scope_reductions_confirmed,
+            )
         except Exception as exc:
             outcome = {"status": "error", "detail": str(exc)}
         results.append(schemas.PushResultItem(target=instance.name, **outcome))
@@ -305,7 +451,7 @@ def diff_with_instances(
     pat = crypto.decrypt(target.pat_encrypted)
     path = target.custom_fields_path
     try:
-        template = github_repo.get_file(pat, target.repo, target.branch, path)["payload"]
+        template = _normalized_template(github_repo.get_file(pat, target.repo, target.branch, path)["payload"])
     except Exception as exc:
         raise _github_error_to_http(exc)
 

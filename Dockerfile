@@ -1,9 +1,9 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1
 
-ARG CADDY_VERSION=v2.11.4
+ARG CADDY_VERSION=v2.11.7
 ARG XCADDY_VERSION=v0.4.5
 
-FROM cgr.dev/chainguard/go:latest-dev@sha256:11b08ed26e99379f8df32197348c1a16093b15a071bbd2793125040982f46f91 AS caddy-builder
+FROM cgr.dev/chainguard/go:latest-dev@sha256:6055a57369276c7c92be9fd83d5eace9d3d401d011cd53f475d3ece8daa0333e AS caddy-builder
 ARG CADDY_VERSION
 ARG XCADDY_VERSION
 COPY security/go-fixes.txt /build/security/go-fixes.txt
@@ -30,12 +30,12 @@ replacements="$(awk '
             printf "--replace %s=%s ", source, target
         }
     ' /build/security/go-fixes.txt)"
-test -n "$replacements"
 # Intentional word splitting: each generated --replace pair is a separate xcaddy argument.
+# An empty or comments-only file expands to no extra arguments.
 CGO_ENABLED=0 /root/go/bin/xcaddy build "${CADDY_VERSION}" $replacements --output /out/caddy
 EOF
 
-FROM cgr.dev/chainguard/python:latest-dev@sha256:eb0d45dfc69fecb471d2eaee7a8eea281bf860578ef44cb85db1bfa8165c47fe AS app-builder
+FROM cgr.dev/chainguard/python:latest-dev@sha256:96cb9c155159daf6b21e70555f244081909ff161c5589112ddf308624c1a1c77 AS app-builder
 USER root
 RUN apk add --no-cache nodejs npm
 
@@ -57,11 +57,13 @@ COPY frontend frontend
 RUN cd frontend && npm run build
 
 COPY backend/app /app/app
+COPY config /app/config
+COPY templates /app/templates
 COPY deploy/serve.py /app/serve.py
 COPY Caddyfile /app/Caddyfile
 RUN mkdir -p /app/data /app/certs && chown -R 65532:65532 /app
 
-FROM cgr.dev/chainguard/python:latest@sha256:565af762d7f3efedc4e60d7ac7815e41588211d3f5757be33d8303e915ee6c72 AS runner
+FROM cgr.dev/chainguard/python:latest@sha256:1961420e5f93bd056d4b0b40eca12cdf01b3ed09177aa4d6ec71fab38cbf158f AS runner
 WORKDIR /app
 
 ENV PATH="/app/venv/bin:$PATH" \
@@ -74,6 +76,8 @@ ENV PATH="/app/venv/bin:$PATH" \
 COPY --from=caddy-builder /out/caddy /usr/bin/caddy
 COPY --from=app-builder --chown=65532:65532 /app/venv /app/venv
 COPY --from=app-builder --chown=65532:65532 /app/app /app/app
+COPY --from=app-builder --chown=65532:65532 /app/config /app/config
+COPY --from=app-builder --chown=65532:65532 /app/templates /app/templates
 COPY --from=app-builder --chown=65532:65532 /app/serve.py /app/serve.py
 COPY --from=app-builder --chown=65532:65532 /app/Caddyfile /app/Caddyfile
 COPY --from=app-builder --chown=65532:65532 /build/frontend/dist /app/frontend

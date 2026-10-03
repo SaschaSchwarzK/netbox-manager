@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class CustomFieldChoiceSet(BaseModel):
@@ -23,7 +23,7 @@ class CustomField(BaseModel):
     name: str
     label: Optional[str] = None
     type: str = "text"  # text, longtext, integer, decimal, boolean, date, datetime, url, json, select, multiselect, object, multiobject
-    content_types: list[str] = Field(default_factory=list)  # e.g. ["dcim.device", "dcim.rack"]
+    object_types: list[str] = Field(default_factory=list)  # e.g. ["dcim.device", "dcim.rack"]
     description: Optional[str] = None
     required: bool = False
     unique: bool = False
@@ -42,6 +42,13 @@ class CustomField(BaseModel):
     validation_maximum: Optional[int] = None
     validation_regex: Optional[str] = None
     comments: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_pre_4_scope_name(cls, value):
+        if isinstance(value, dict) and "content_types" in value:
+            raise ValueError("content_types is unsupported; use object_types (NetBox >= 4.6.8).")
+        return value
 
 
 class CustomFieldsTemplate(BaseModel):

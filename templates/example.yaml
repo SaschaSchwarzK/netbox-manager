@@ -1,0 +1,13 @@
+name: example
+version: 1
+description: Example only; replace with an organization-specific permission policy.
+permissions:
+  - object_type: dcim.device
+    tenant_relation: tenant
+    actions: [view, add, change, delete]
+  - object_type: dcim.interface
+    tenant_relation: device__tenant
+    actions: [view, add, change, delete]
+  - object_type: ipam.fhrpgroup
+    tenant_relation: unsupported
+    actions: []

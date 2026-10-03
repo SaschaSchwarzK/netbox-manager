@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 WeightUnit = Literal["kg", "g", "lb", "oz"]
 
@@ -68,6 +68,8 @@ class ModuleBayTemplate(ComponentTemplateBase):
 
 
 class DeviceType(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     manufacturer: str
     model: str
     slug: str
@@ -95,12 +97,39 @@ class DeviceType(BaseModel):
     device_bays: list[DeviceBayTemplate] = Field(default_factory=list, alias="device-bays")
     module_bays: list[ModuleBayTemplate] = Field(default_factory=list, alias="module-bays")
 
-    class Config:
-        populate_by_name = True
+    @model_validator(mode="before")
+    @classmethod
+    def collect_netbox_custom_field_columns(cls, value):
+        """Accept both NetBox-native cf_* keys and the manager's legacy map."""
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        nested = dict(data.get("custom_fields") or {})
+        for key in list(data):
+            if not key.startswith("cf_"):
+                continue
+            name = key[3:]
+            if not name:
+                raise ValueError("A device-type custom-field key must include a name after 'cf_'.")
+            native_value = data.pop(key)
+            if name in nested and nested[name] != native_value:
+                raise ValueError(
+                    f"Conflicting values supplied for custom field {name!r} via custom_fields and {key}."
+                )
+            nested[name] = native_value
+        data["custom_fields"] = nested
+        return data
+
+    def to_internal_dict(self) -> dict[str, Any]:
+        """Shape used by the editor and NetBox REST API."""
+        return self.model_dump(by_alias=True, exclude_none=True)
 
     def to_yaml_dict(self) -> dict[str, Any]:
-        """Serialize back to the hyphenated keys NetBox/community YAML expects."""
-        data = self.model_dump(by_alias=True, exclude_none=True)
+        """Serialize to a YAML document accepted by NetBox's bulk importer."""
+        data = self.to_internal_dict()
+        custom_fields = data.pop("custom_fields", {})
+        for name, value in custom_fields.items():
+            data[f"cf_{name}"] = value
         return data
 
 
