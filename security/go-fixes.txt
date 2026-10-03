@@ -6,14 +6,3 @@
 # When the right-hand side is only a version, the build converts it to
 # <module>@<version>. Blank lines and comments are ignored.
 
-# CVE-2026-56854 / CVE-2026-56855
-golang.org/x/crypto=v0.56.0
-
-# CVE-2026-46600 and related fixes
-golang.org/x/net=v0.58.0
-
-# CVE-2026-56852 and related fixes
-golang.org/x/text=v0.41.0
-
-# CVE-2026-84304 / CVE-2026-84445 / GHSA-hrxh-6v49-42gf
-google.golang.org/grpc=v1.83.2

@@ -29,6 +29,24 @@ def test_reconcile_creates_updates_then_deletes_managed_permissions():
 
 
 @responses.activate
+def test_reconcile_combines_matching_permissions_into_one_netbox_permission():
+    base = "https://netbox.example/api"
+    responses.get(f"{base}/users/permissions/", json={"results": []})
+    responses.post(f"{base}/users/permissions/", json={"id": 3})
+    client = RequestsNetBox("https://netbox.example", "secret", True)
+
+    result = client.reconcile({"id": 7}, [
+        {"object_type": "dcim.device", "actions": ["view", "change"], "constraints": {"tenant__id": 42}},
+        {"object_type": "dcim.site", "actions": ["view", "change"], "constraints": {"tenant__id": 42}},
+    ], "nbm:prod:42:rw")
+
+    assert result == {"created": 1, "updated": 0, "deleted": 0}
+    posts = [call.request for call in responses.calls if call.request.method == "POST"]
+    assert len(posts) == 1
+    assert b'"object_types": ["dcim.device", "dcim.site"]' in posts[0].body
+
+
+@responses.activate
 def test_delete_group_deletes_owned_exclusive_and_detaches_foreign_or_shared():
     base = "https://netbox.example/api"
     responses.get(f"{base}/users/permissions/", json={"results": [
