@@ -14,6 +14,8 @@ router's purpose, base prefix, and its endpoints.
 - [9. Syslog](#9-syslog)
 - [10. Access](#10-access)
 - [11. GitHub Targets](#11-github-targets)
+- [12. Migrations](#12-migrations)
+- [13. Tenant Permissions](#13-tenant-permissions)
 
 ---
 
@@ -810,4 +812,161 @@ The new-settings test accepts optional fields plus optional `id`. Without `id`, 
 repo/branch/PAT are required. With `id`, the caller needs resource-admin rights and omitted
 values (including a blank PAT) fall back to the stored target. The stored-target test is
 available to any caller who can see the target; scoped-out/missing targets return 404.
-~~~
+
+---
+
+## 12. Migrations
+
+**File:** `backend/app/routers/migrations.py`
+
+**Prefix:** `/api/migrations` | **Tag:** `migrations`
+
+Plans, executes, reports, retries, cancels, and rolls back dependency-aware migrations between two
+configured NetBox instances. Planning and execution run in background threads with their own
+database sessions. The source client is read-only. Job visibility requires access to both source
+and target; target mutations require a resource-scoped Admin role for the target.
+
+### Endpoints
+
+| Method | Path | Summary |
+|---|---|---|
+| GET | `/api/migrations/types` | List selectable migration types and dependency metadata |
+| GET | `/api/migrations/instances/{instance_id}/tenants` | Search or list tenants on a source instance |
+| POST | `/api/migrations/preflight` | Test source and target connectivity and token validity |
+| POST | `/api/migrations/plan` | Create or re-plan a background dry-run job |
+| GET | `/api/migrations/jobs` | List recent visible migration jobs |
+| GET | `/api/migrations/jobs/{job_id}` | Get job status and summary counters |
+| GET | `/api/migrations/jobs/{job_id}/mapping-skeleton` | List planned objects for mapping review |
+| GET | `/api/migrations/jobs/{job_id}/target-options` | List target objects for a manual mapping |
+| POST | `/api/migrations/jobs/{job_id}/execute` | Execute a confirmed planned job |
+| POST | `/api/migrations/jobs/{job_id}/cancel` | Request cancellation of a running job |
+| POST | `/api/migrations/jobs/{job_id}/retry-failed` | Reset and retry failed items and patches |
+| POST | `/api/migrations/jobs/{job_id}/rollback` | Best-effort deletion of objects created by the job |
+| GET | `/api/migrations/jobs/{job_id}/report` | Render the job report as HTML or JSON |
+
+**`GET /types`**
+
+- Returns the selectable registry types with `type`, display `label`, immediate `dependencies`, and
+  immediate `optional_dependencies`.
+- `required_selectable_dependencies` is the full required transitive closure filtered to other
+  selectable types. Traversal continues through non-selectable intermediate types.
+- `possible_optional_selectable_dependencies` contains selectable types reachable through a path
+  with at least one optional edge. Types also guaranteed by a required path are omitted.
+- These fields drive locked required selections and optional hints in the UI. They do not replace
+  backend dependency resolution.
+
+**`POST /preflight`** — `MigrationPreflightRequest` → `MigrationPreflightResponse`
+
+- Requires visible source and target instances.
+- Reports reachability, token validity, version, and detail for each side.
+- Target write capability is deliberately not probed (`write_permission_checked=false`).
+
+**`POST /plan`** — `MigrationPlanRequest` → `MigrationJobSummary`
+
+- Requires Editor role, source visibility, and Admin role on the target.
+- Accepts source/target IDs, explicit `selected_types`, tenant slugs, `include_untenanted`, conflict
+  policy, mapping overrides, marker-tag/fail-fast options, and per-instance request rate.
+- Validates that explicit selections are selectable, stores the request, and starts background
+  planning. The registry resolves required and optional dependencies again on the backend.
+- `job_id` re-plans an existing unexecuted job in place; source and target cannot change.
+- Mapping override keys use `type.key:source_id`, for example `dcim.site:12`.
+
+**Mapping review**
+
+- `/mapping-skeleton` returns source identity, natural-key match detail, proposed action, and target
+  identity for each planned object after planning finishes.
+- `/target-options?object_type=...&q=...` reads human-labelled candidates from the target for the
+  manual mapping dropdown.
+- Execution is rejected while any item remains `ambiguous`.
+
+**Execution controls**
+
+- `/execute` requires `{ "confirm": true }`, a `planned` job, and target Admin access.
+- `/cancel` sets a cooperative cancellation flag; execution stops between item operations.
+- `/retry-failed` is available for `completed_with_errors` or `failed` jobs and returns errored
+  items and patches to pending before resuming the idempotent executor.
+- `/rollback` requires `{ "confirm": true }` after execution has stopped. It deletes successfully
+  created objects in reverse dependency order. It does not revert updates, delete mapped objects,
+  guarantee removal of patches on surviving objects, or remove the marker-tag definition.
+
+**`GET /jobs/{job_id}/report`**
+
+- `format=html` (default) returns the rendered report; `format=json` returns structured report data.
+- `download=true` adds a migration-specific attachment filename.
+- Reports and job details require visibility of both source and target instances.
+
+See the [Data Migration Guide](data-migration.md) for the UI workflow.
+
+---
+
+## 13. Tenant Permissions
+
+**File:** `backend/app/routers/tenant_permissions.py`
+
+**Prefix:** `/api/repos/{target_id}/tenant-permissions` | **Tag:** `tenant-permissions`
+
+Manages GitHub-backed permission templates and tenant-specific NetBox RO/RW groups. Templates are
+validated against `config/tenant-relations.yaml` and `config/blocklist.yaml`. NetBox mutations are
+reconciled with stable ownership keys; generated metadata and resolved grants are saved through
+pull requests rather than direct writes to the configured base branch.
+
+### Endpoints
+
+| Method | Path | Summary |
+|---|---|---|
+| GET | `/api/repos/{target_id}/tenant-permissions/templates` | List merged permission templates |
+| GET | `/api/repos/{target_id}/tenant-permissions/templates/{name}` | Read a template by name |
+| POST | `/api/repos/{target_id}/tenant-permissions/validate` | Validate and normalize template YAML |
+| PUT | `/api/repos/{target_id}/tenant-permissions/templates` | Save a custom template through a PR |
+| GET | `/api/repos/{target_id}/tenant-permissions/tenants` | List visible repository-managed tenants |
+| GET | `/api/repos/{target_id}/tenant-permissions/instances/{instance_id}/available-tenants` | Search NetBox tenants |
+| POST | `/api/repos/{target_id}/tenant-permissions/onboard` | Reconcile one tenant and open a state PR |
+| POST | `/api/repos/{target_id}/tenant-permissions/apply/plan` | Plan a template update across managed tenants |
+| POST | `/api/repos/{target_id}/tenant-permissions/apply` | Apply a template update across managed tenants |
+| POST | `/api/repos/{target_id}/tenant-permissions/decommission` | Remove managed groups and open a cleanup PR |
+
+**Templates**
+
+- List/read endpoints operate on merged repository content under `templates/`; custom templates use
+  `templates/custom/{name}.yaml`.
+- Validation requires `name`, `version`, `description`, and a `permissions` list. Each object type
+  is unique, must exist in the canonical relation registry, must not be blocklisted, and accepts
+  only `view`, `add`, `change`, and `delete` actions.
+- Write actions gain `view` unless `no_auto_view: true` is explicit.
+- An active entry whose registry relation is unsupported requires `accept_unscoped: true` and a
+  non-empty `note`; its rendered constraints are empty and therefore global.
+- Save requires Editor role, normalizes the document again, and opens a PR. `previous_name` removes
+  the previous custom path in that PR when a template is renamed.
+
+**Tenant discovery and onboarding**
+
+- Available-tenant search reads at most 50 matching tenants from the visible NetBox instance.
+- Onboarding requires Editor role plus Admin access on the selected instance. Payload fields are
+  `instance_id`, numeric `tenant_id`, verbatim and distinct `oidc_group_ro` and `oidc_group_rw`,
+  required `rw_template`, and optional `ro_template`.
+- Without `ro_template`, RO permissions are derived from the RW template by retaining only `view`
+  for every active entry.
+- Existing untracked group-name collisions are rejected. The operation reconciles NetBox first,
+  then opens a PR containing `metadata.yaml`, `ro.resolved.yaml`, and `rw.resolved.yaml` under
+  `instances/{instance_name}/tenants/{tenant_id}/` when state changed.
+
+**Fleet apply**
+
+- Managed tenants are selected from merged metadata that references the chosen template directly
+  or as the source of an automatically derived RO template.
+- Both plan and apply authorize Admin access for every selected instance before proceeding.
+- `/apply/plan` performs read-only reconciliation calculations and returns per-instance
+  create/update/delete stats, unscoped grants, or an error.
+- `/apply` reconciles each tenant independently, audits each result, and opens generated-state PRs
+  when required.
+
+**Decommission**
+
+- Requires Editor plus Admin access on the instance and operates only on merged tracked metadata.
+- With `force=false`, groups containing members return HTTP 409 with
+  `detail.code="group_has_members"`.
+- A successful operation deletes the tracked groups and manager-owned permissions, then opens a PR
+  removing the tenant's generated repository directory. It does not delete the NetBox tenant or
+  change identity-provider membership.
+
+See the [Tenant Permissions Guide](tenant-permissions.md) for template YAML and the UI workflow.

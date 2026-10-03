@@ -1,14 +1,20 @@
 # NetBox Manager
 
-A web UI for managing device-type definitions across multiple NetBox instances.
+A web UI for managing configuration and data across multiple NetBox instances, including
+device-type definitions, custom fields, controlled instance-to-instance migrations, and
+GitHub-backed tenant permissions.
 **Device-type YAML files live directly in a GitHub repo** (e.g. a fork of
 [netbox-community/devicetype-library](https://github.com/netbox-community/devicetype-library)) —
 the repo is the source of truth, and every save from the editor is a git commit (or PR).
-The app's own config (NetBox instances, GitHub repo targets, push history) is kept in a small
-local SQLite database.
+The app's operational configuration and state (instances, GitHub targets, access mappings, audit
+history, drift records, and migration jobs) are kept in a local SQLite database.
 
-For application workflows and annotated screenshot placeholders, see the
-[NetBox Manager User Guide](docs/user-guide.md).
+Documentation:
+
+- [NetBox Manager User Guide](docs/user-guide.md)
+- [Data Migration Guide](docs/data-migration.md)
+- [Tenant Permissions Guide](docs/tenant-permissions.md)
+- [API Routers Reference](docs/api-routers.md)
 
 ## Stack
 
@@ -96,7 +102,9 @@ There is **no database table for device-types**. Instead:
 - The **Device Types** page lists every `.yml`/`.yaml` file under that path directly from GitHub (via the git trees API), and clicking one loads it straight from the repo into the editor.
 - "New from scratch" and "Import YAML" commit a new file immediately.
 - Saving in the editor is a commit — optionally routed through a PR instead of committing straight to the branch. GitHub's file SHA is used for optimistic concurrency, so if the file changed on GitHub since you loaded it, the save is rejected with a clear message rather than silently overwriting someone else's edit.
-- The SQLite DB only holds NetBox instance configs (encrypted tokens), GitHub target configs (encrypted PAT), and a push-history log — no device-type content.
+- The SQLite DB holds operational configuration and state, including encrypted instance tokens and
+  GitHub PATs, access mappings, audit/drift records, and migration jobs. It does not hold
+  device-type or tenant-permission template content.
 
 ## What's implemented
 
@@ -106,6 +114,19 @@ There is **no database table for device-types**. Instead:
 - **Import** — upload a `.yml`/`.yaml` file; it opens as an in-memory, unsaved draft (nothing is written to GitHub until the first save).
 - **PR-only workflow** — there is no direct-commit path. Every save opens (or adds a commit to) a pull request, with an auto-generated, editable commit message and PR description summarizing what changed (component counts, added/removed fields). Re-saving a device type that already has an open PR adds to that same PR instead of forking a new one.
 - **Cross-instance search** (**Search** page) — finds devices, virtual machines, virtual device contexts, IP addresses, prefixes, and MAC addresses by name, serial, address, or MAC, fanned out across every selected NetBox instance in parallel. Devices/VMs/VDCs/IPs/prefixes use NetBox's `q` quick-search filter; MAC lookups use an exact `mac_address` filter against both interface-level and dedicated MAC Address objects since NetBox doesn't support partial MAC matching. A malformed MAC/IP query is caught and treated as "no results" for that lookup rather than failing the whole search.
+- **Data migration** (**Data Migration** page) — plans and executes dependency-aware moves between
+  NetBox instances. The source is read-only; required selectable dependencies are auto-selected
+  and locked in the UI; optional referenced types are explained separately. A dry run reports
+  creates, updates, maps, skips, ambiguous matches, and errors before any target write. Operators
+  can override mappings, retry failed objects, download reports, cancel between operations, and
+  perform a best-effort rollback of objects created by the job. See the
+  [Data Migration Guide](docs/data-migration.md).
+- **Tenant permission automation** (**Tenant Permissions** page) — validates GitHub-backed YAML
+  permission templates, creates tenant-specific RO/RW NetBox groups, applies merged template
+  changes across managed tenants through a read-only plan and explicit confirmation, and safely
+  decommissions managed groups. Canonical tenant relations, an identity/RBAC blocklist, collision
+  checks, and explicit warnings for unscoped grants make the workflow fail closed. See the
+  [Tenant Permissions Guide](docs/tenant-permissions.md).
 
 ### Change safety across many instances
 
@@ -246,6 +267,25 @@ Because every GitHub commit in this app goes through one shared PAT, GitHub's ow
 
 The **Audit Log** page lists all of this, newest first: timestamp, actor, action type (GitHub save vs. NetBox push), target, device-type path, status, and detail.
 
+## Data migration
+
+The migration workflow is plan-first. Select a source, target, optional tenant filter, and the
+top-level types to move. Required dependencies are resolved transitively: selectable dependencies
+appear as locked checked boxes, while non-selectable reference data is still included by the
+backend as needed. Optional dependencies are data-dependent and appear only as hints in the
+selection UI.
+
+The planner matches objects using type-specific natural keys and produces a detailed report without
+writing to either instance. Ambiguous matches must be mapped, skipped, or forced to create before
+execution. The source API client permits read operations only. Execution requires Editor access
+plus Admin access on the target instance and runs in dependency order with request-rate limiting,
+optional fail-fast behavior, cancellation, retry of failed work, and best-effort rollback.
+
+Rollback deletes only objects successfully created by the migration. It does not restore updated
+objects, delete mapped objects, guarantee removal of already-applied patches on surviving objects,
+or remove the marker-tag definition. See the [Data Migration Guide](docs/data-migration.md) for the
+complete workflow and safety notes.
+
 ## Tenant permission automation
 
 The **Tenant Permissions** page manages GitHub-backed CRUD permission templates, onboards a tenant
@@ -277,6 +317,10 @@ checker inside that installation's Django environment:
 The checker validates direct `Tenant` foreign keys only. Indirect paths such as
 `device__tenant` and unsupported generic relationships still require manual review; missing
 registry entries remain fail-closed.
+
+See the [Tenant Permissions Guide](docs/tenant-permissions.md) for the template schema, YAML
+examples, onboarding procedure, fleet apply workflow, generated repository layout, and guarded
+decommissioning steps.
 
 ## Known limitations
 

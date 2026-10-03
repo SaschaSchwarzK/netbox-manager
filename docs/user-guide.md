@@ -4,6 +4,11 @@ This guide explains the day-to-day workflows in NetBox Manager. It is intended f
 editors, resource administrators, and application administrators. Deployment and environment
 configuration remain documented in the project [README](../README.md).
 
+Detailed guides for newer workflows:
+
+- [Data Migration](data-migration.md)
+- [Tenant Permissions](tenant-permissions.md)
+
 ![NetBox Manager application overview](images/user-guide/application-overview.png)
 
 ## 1. Roles and permissions
@@ -33,7 +38,7 @@ Authentication is enforced by default. An intentionally open deployment must exp
 `AUTHENTICATION_DISABLED=True`; that mode also disables authorization and grants unrestricted
 access to every request.
 
-> **Screenshot placeholder:** Login screen showing SSO and local-admin options.  
+> **Screenshot placeholder:** Login screen showing SSO and local-admin options.
 > Suggested file: `docs/images/user-guide/login.png`
 >
 > <!-- Replace this blockquote with: ![NetBox Manager login screen](images/user-guide/login.png) -->
@@ -158,7 +163,55 @@ A custom field's **content types** determine where it can be used. Give it "Devi
 
 ![Custom-fields template editor](images/user-guide/custom-fields.png)
 
-## 9. Monitor fleet health and drift
+## 9. Migrate data between NetBox instances
+
+Use **Data Migration** to copy selected data from a read-only source to a target instance.
+
+1. Select different source and target instances and run **Test connection**.
+2. Optionally select one or more source tenants and whether to include untenanted objects.
+3. Select the data types to migrate. Required selectable dependencies are checked and locked
+   automatically; optional dependencies are shown as possible referenced data.
+4. Choose the default conflict policy and any per-type overrides.
+5. Select **Preview migration (dry run)**.
+6. Review creates, updates, maps, skips, warnings, and errors. Resolve every ambiguous match and
+   re-plan mapping changes.
+7. Confirm the reviewed plan and run the migration.
+8. Review the final report. Retry failed work or perform a best-effort rollback when appropriate.
+
+Planning does not write to either instance. Execution requires Admin access on the target. Rollback
+deletes only objects created by the job; it does not restore updated objects or remove mapped
+objects. See the [Data Migration Guide](data-migration.md) for dependency behavior, mapping choices,
+status meanings, and recovery procedures.
+
+> **Screenshot placeholder:** Reviewed data migration plan ready to run.
+> Suggested file: `docs/images/user-guide/data-migration.png`
+>
+> <!-- Replace this blockquote with: ![Reviewed data migration plan](images/user-guide/data-migration.png) -->
+
+## 10. Manage tenant permissions
+
+Use **Tenant Permissions** to maintain tenant-specific NetBox groups and object permissions from
+GitHub-backed YAML templates.
+
+1. Select a GitHub target.
+2. Create or edit a template on the **Templates** tab, validate it, and merge its pull request.
+3. On **Onboard tenant**, select the instance and tenant, enter distinct RO/RW OIDC group names,
+   and select the templates to reconcile.
+4. After a template update is merged, use **Plan fleet apply**, review every tenant row, and confirm
+   the fleet operation.
+5. Use **Managed tenants** to inspect tracked assignments or decommission a tenant. Populated groups
+   are protected by an additional refusal and force-confirmation step.
+
+The feature manages groups and permissions, not identity-provider membership. Unsupported tenant
+relations become global grants and require explicit YAML acceptance plus a written justification.
+See the [Tenant Permissions Guide](tenant-permissions.md) for the YAML schema and security rules.
+
+> **Screenshot placeholder:** Tenant Permissions page showing templates and managed tenants.
+> Suggested file: `docs/images/user-guide/tenant-permissions.png`
+>
+> <!-- Replace this blockquote with: ![Tenant permission management](images/user-guide/tenant-permissions.png) -->
+
+## 11. Monitor fleet health and drift
 
 Use **Fleet** to check NetBox reachability, versions, installed plugins, response time, and
 available token-expiry information. Resolve connectivity or credential warnings before a large
@@ -175,7 +228,7 @@ by the administrator.
 
 [Drift results](images/user-guide/drift.png)
 
-## 10. Review audit and syslog status
+## 12. Review audit and syslog status
 
 The **Audit Log** records GitHub saves and NetBox pushes, including the actor, target, status, and
 details. Failed and rejected actions are retained as well as successful actions.
@@ -185,7 +238,7 @@ settings are read-only in the UI and must be changed through deployment configur
 
 ![Audit log](images/user-guide/audit-log.png)
 
-## 11. Manage access mappings
+## 13. Manage access mappings
 
 This page is visible only to application administrators. Each row maps one OIDC group to a role
 and a scope:
@@ -201,7 +254,7 @@ admin group configured so administrators can recover from mapping mistakes.
 
 ![Access mappings](images/user-guide/access-mappings.png)
 
-## 12. Common problems
+## 14. Common problems
 
 | Symptom | What to check |
 |---|---|
@@ -209,6 +262,10 @@ admin group configured so administrators can recover from mapping mistakes.
 | Edit or create returns 403 | Creating/removing needs app admin; editing needs app admin or admin on that resource |
 | Test connection fails | Confirm URL/repository, token permissions, SSL trust, and network reachability |
 | Approval-gated publish is blocked | Confirm the current content came from a merged PR with an approving review |
+| A migration dependency cannot be cleared | Clear the selected data type that requires it; locked dependencies are derived automatically |
+| Migration execution is unavailable | Re-plan mapping changes, resolve ambiguous matches, confirm the plan, and verify Admin access on the target |
+| A tenant permission template is missing | Merge its pull request into the GitHub target's configured base branch |
+| Tenant onboarding reports a group collision | Use distinct, untracked group names or verify the existing managed-tenant metadata |
 | A token field is blank while editing | This is expected; leave it blank to keep the stored secret |
 | GitHub files appear to have moved after editing a target | Changing repo/branch/path changes the lookup location but does not move existing files |
 | Local login returns 429 | Wait for the five-minute per-process failure window or restart the single backend process |
