@@ -679,3 +679,133 @@ export const customFieldsApi = {
       method: "POST", body: JSON.stringify({ instance_ids, tags, overwrite: false }),
     }),
 };
+
+// ---------- Data migration ----------
+
+export interface MigrationType {
+  type: string;
+  label: string;
+  dependencies: string[];
+  optional_dependencies: string[];
+  required_selectable_dependencies: string[];
+  possible_optional_selectable_dependencies: string[];
+}
+
+export interface MigrationTenant {
+  id: number;
+  name: string;
+  slug: string;
+}
+
+export interface MigrationMappingOverride {
+  action: "map" | "skip" | "create";
+  target_id?: number | null;
+}
+
+export interface MigrationPlanRequest {
+  source_instance_id: string;
+  target_instance_id: string;
+  selected_types: string[];
+  tenant_filter: string[];
+  include_untenanted?: boolean;
+  mapping_overrides?: Record<string, MigrationMappingOverride>;
+  conflict_policy?: Record<string, string>;
+  marker_tag?: boolean;
+  fail_fast?: boolean;
+  max_requests_per_second?: number;
+  job_id?: string | null;
+}
+
+export type MigrationJobStatus =
+  | "planning" | "planned" | "running" | "completed" | "completed_with_errors" | "failed" | "cancelled"
+  | "rolling_back" | "rolled_back" | "rolled_back_with_errors";
+
+export interface MigrationRollbackResult {
+  job: MigrationJobSummary;
+  detail: string;
+  deleted: number;
+  failed: number;
+  untouched_mapped: number;
+  untouched_updated: number;
+}
+
+export interface MigrationJobSummary {
+  id: string;
+  source_instance_id: string;
+  target_instance_id: string;
+  source_instance_name?: string | null;
+  target_instance_name?: string | null;
+  status: MigrationJobStatus;
+  phase: "primary" | "patch" | "done";
+  current_step?: string | null;
+  tenant_filter: string[];
+  selected_types: string[];
+  totals: Record<string, Record<string, number>>;
+  warnings: string[];
+  created_at: string;
+  started_at?: string | null;
+  last_heartbeat_at?: string | null;
+  finished_at?: string | null;
+  actor_name?: string | null;
+}
+
+export interface MigrationMappingSkeletonRow {
+  override_key: string;
+  object_type: string;
+  source_id: number;
+  source_natural_key: string;
+  auto_match: "matched" | "no_match" | "ambiguous";
+  target_id?: number | null;
+  target_natural_key?: string | null;
+  match_detail?: string | null;
+  action?: "map" | "skip" | "create" | null;
+}
+
+export interface MigrationTargetOption {
+  id: number;
+  label: string;
+}
+
+export interface MigrationPreflightSide {
+  reachable: boolean;
+  token_valid: boolean;
+  netbox_version?: string | null;
+  detail?: string | null;
+  write_permission_checked?: boolean | null;
+  write_permission_ok?: boolean | null;
+}
+
+export interface MigrationPreflightResult {
+  source: MigrationPreflightSide;
+  target: MigrationPreflightSide;
+}
+
+export const migrationsApi = {
+  types: () => request<MigrationType[]>("/migrations/types"),
+  tenants: (instanceId: string, query = "") => request<MigrationTenant[]>(
+    `/migrations/instances/${instanceId}/tenants${query ? `?q=${encodeURIComponent(query)}` : ""}`,
+  ),
+  plan: (data: MigrationPlanRequest) =>
+    request<MigrationJobSummary>("/migrations/plan", { method: "POST", body: JSON.stringify(data) }),
+  jobs: () => request<MigrationJobSummary[]>("/migrations/jobs"),
+  job: (id: string) => request<MigrationJobSummary>(`/migrations/jobs/${id}`),
+  mappingSkeleton: (id: string) => request<MigrationMappingSkeletonRow[]>(`/migrations/jobs/${id}/mapping-skeleton`),
+  targetOptions: (id: string, objectType: string, query = "") => request<MigrationTargetOption[]>(
+    `/migrations/jobs/${id}/target-options?object_type=${encodeURIComponent(objectType)}${query ? `&q=${encodeURIComponent(query)}` : ""}`,
+  ),
+  preflight: (source_instance_id: string, target_instance_id: string) =>
+    request<MigrationPreflightResult>("/migrations/preflight", {
+      method: "POST", body: JSON.stringify({ source_instance_id, target_instance_id }),
+    }),
+  execute: (id: string) =>
+    request<MigrationJobSummary>(`/migrations/jobs/${id}/execute`, {
+      method: "POST", body: JSON.stringify({ confirm: true }),
+    }),
+  cancel: (id: string) => request<MigrationJobSummary>(`/migrations/jobs/${id}/cancel`, { method: "POST" }),
+  retryFailed: (id: string) => request<MigrationJobSummary>(`/migrations/jobs/${id}/retry-failed`, { method: "POST" }),
+  rollback: (id: string) => request<MigrationRollbackResult>(`/migrations/jobs/${id}/rollback`, {
+    method: "POST", body: JSON.stringify({ confirm: true }),
+  }),
+  reportUrl: (id: string) => `/api/migrations/jobs/${id}/report`,
+  reportDownloadUrl: (id: string) => `/api/migrations/jobs/${id}/report?download=true`,
+};

@@ -8,8 +8,8 @@ from starlette.responses import JSONResponse
 
 from app.auth import get_current_user_optional
 from app.config import settings
-from app.database import Base, SessionLocal, engine
-from app.routers import auth, device_types, drift, fleet, github, instances, search, tenant_permissions
+from app.database import Base, SessionLocal, engine, upgrade_existing_schema
+from app.routers import auth, device_types, drift, fleet, github, instances, migrations, search, tenant_permissions
 from app.routers import audit as audit_router
 from app.routers import custom_fields
 from app.routers import syslog as syslog_router
@@ -50,6 +50,7 @@ if not settings.authentication_disabled and settings.local_admin_enabled:
     logger.info("Break-glass local admin login is enabled.")
 
 Base.metadata.create_all(bind=engine)
+upgrade_existing_schema(engine)
 
 app = FastAPI(title="NetBox Manager API", version="0.1.0")
 
@@ -98,6 +99,7 @@ app.include_router(custom_fields.router)
 app.include_router(syslog_router.router)
 app.include_router(access_router.router)
 app.include_router(tenant_permissions.router)
+app.include_router(migrations.router)
 
 
 def _run_scheduled_drift_check():
@@ -127,6 +129,44 @@ def start_scheduler():
     )
     scheduler.start()
     app.state.scheduler = scheduler
+
+
+@app.on_event("startup")
+def resume_orphaned_migration_jobs():
+    """
+    Any MigrationJob found with status="running" at startup is unambiguously
+    orphaned: this is a single-process deployment (see README — one
+    container, no task queue), so the process that owned it is simply gone
+    (crashed, was killed, or the container restarted). It is always safe to
+    resume such a job without any lease or heartbeat comparison — there is
+    no other process it could still belong to. See
+    services/migration/executor.py for why resuming is safe (every write is
+    committed immediately, and creates are re-checked by natural key first).
+    """
+    import json as _json
+    import threading
+
+    from app import models
+    from app.routers.migrations import _run_in_background, _run_plan_in_background, _run_rollback_in_background
+
+    db = SessionLocal()
+    try:
+        orphaned = db.query(models.MigrationJob).filter(models.MigrationJob.status == "running").all()
+        for job in orphaned:
+            options = _json.loads(job.options_json or "{}")
+            max_rps = options.get("max_requests_per_second", 4.0)
+            logger.warning("Resuming orphaned migration job %s (found status=running at startup).", job.id)
+            threading.Thread(target=_run_in_background, args=(job.id, max_rps), daemon=True).start()
+        orphaned_plans = db.query(models.MigrationJob).filter(models.MigrationJob.status == "planning").all()
+        for job in orphaned_plans:
+            logger.warning("Resuming orphaned migration planning job %s at startup.", job.id)
+            threading.Thread(target=_run_plan_in_background, args=(job.id,), daemon=True).start()
+        orphaned_rollbacks = db.query(models.MigrationJob).filter(models.MigrationJob.status == "rolling_back").all()
+        for job in orphaned_rollbacks:
+            logger.warning("Resuming orphaned migration rollback %s at startup.", job.id)
+            threading.Thread(target=_run_rollback_in_background, args=(job.id,), daemon=True).start()
+    finally:
+        db.close()
 
 
 @app.get("/api/health")

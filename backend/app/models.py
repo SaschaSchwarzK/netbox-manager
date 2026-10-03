@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -13,6 +13,18 @@ def gen_uuid() -> str:
 
 SCOPE_ALL = "*"
 RESOURCE_TYPES = ("*", "instance", "github_target")
+
+# MigrationJob.status
+MIGRATION_JOB_STATUSES = (
+    "planning", "planned", "running", "completed", "completed_with_errors", "failed", "cancelled",
+    "rolling_back", "rolled_back", "rolled_back_with_errors",
+)
+# MigrationJob.phase
+MIGRATION_JOB_PHASES = ("primary", "patch", "done")
+# MigrationJobItem.planned_action / MigrationJobPatch have no "planned_action" of their own
+MIGRATION_ITEM_ACTIONS = ("create", "update", "map", "skip", "ambiguous")
+# MigrationJobItem.execution_status / MigrationJobPatch.execution_status
+MIGRATION_EXECUTION_STATUSES = ("pending", "done", "error", "rolled_back", "rollback_error")
 
 
 class AccessMapping(Base):
@@ -115,3 +127,133 @@ class DeviceTypePushHistory(Base):
     actor_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     actor_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MigrationJob(Base):
+    """
+    One instance-to-instance data migration run (plan, dry run, or real
+    execution — all three share this same row and code path; see
+    services/migration/planner.py and executor.py).
+
+    Serves as this feature's own audit trail (who ran what, against which
+    instances, when) rather than being folded into DeviceTypePushHistory:
+    that table's repo_target_id is a required FK to github_targets, which a
+    migration job has no equivalent of, and this app has no schema-migration
+    tool to safely relax that constraint on already-deployed databases.
+    Completion is still forwarded to syslog via services.syslog_client
+    directly (see executor.py), for parity with the rest of the app's audit
+    trail.
+    """
+    __tablename__ = "migration_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    source_instance_id: Mapped[str] = mapped_column(String(36), ForeignKey("netbox_instances.id"), nullable=False)
+    target_instance_id: Mapped[str] = mapped_column(String(36), ForeignKey("netbox_instances.id"), nullable=False)
+
+    tenant_filter_json: Mapped[str] = mapped_column(Text, default="[]")  # list[str] of tenant slugs
+    selected_types_json: Mapped[str] = mapped_column(Text, default="[]")  # list[str], as chosen by the user
+    resolved_types_json: Mapped[str] = mapped_column(Text, default="[]")  # list[str], after dependency closure, in order
+    conflict_policy_json: Mapped[str] = mapped_column(Text, default="{}")  # {"default": "skip", "dcim.device": "update", ...}
+    mapping_json: Mapped[str] = mapped_column(Text, default="{}")  # {"dcim.site:12": {"action": "map", "target_id": 3}, ...}
+    options_json: Mapped[str] = mapped_column(Text, default="{}")  # marker tag on/off, include-untenanted, fail-fast, page size, rps, ...
+
+    status: Mapped[str] = mapped_column(String(32), default="planned")
+    phase: Mapped[str] = mapped_column(String(16), default="primary")
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    current_step: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    totals_json: Mapped[str] = mapped_column(Text, default="{}")  # per-type create/update/map/skip/error counts, refreshed as it runs
+    warnings_json: Mapped[str] = mapped_column(Text, default="[]")  # list[str], collected at plan time (dropped custom fields, version notes, ...)
+    api_stats_json: Mapped[str] = mapped_column(Text, default="{}")  # RateLimitStats snapshot for source + target, for the report
+
+    actor_sub: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    actor_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    actor_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class MigrationJobItem(Base):
+    """
+    One row per source object considered by a migration job, written in
+    full at plan time (including `payload_json`, a SNAPSHOT of the sanitized
+    create/update payload as of planning — see the plan discussion on
+    snapshot-at-plan-time semantics). `execution_status`/`target_id` start
+    filled in for skip/map rows (there's nothing left to execute) and get
+    filled in during execution for create/update rows.
+
+    This table IS the id map: rebuilding source-id -> target-id for a given
+    type is just "every row of that type with execution_status='done'".
+    Resuming a crashed job means reloading that map and continuing from the
+    first still-`pending` row in `order_index` order — see executor.py.
+    """
+    __tablename__ = "migration_job_items"
+    __table_args__ = (
+        UniqueConstraint("job_id", "object_type", "source_id", name="uq_migration_job_item"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    job_id: Mapped[str] = mapped_column(String(36), ForeignKey("migration_jobs.id"), nullable=False, index=True)
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False)  # fixed at plan time; topological + depth order
+
+    object_type: Mapped[str] = mapped_column(String(64), nullable=False)  # registry key, e.g. "dcim.device"
+    source_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_natural_key: Mapped[str] = mapped_column(String(512), default="")  # human-readable, for the report (e.g. "core-sw-1 @ AMS-1")
+
+    planned_action: Mapped[str] = mapped_column(String(16), nullable=False)  # create/update/map/skip/ambiguous
+    match_detail: Mapped[str | None] = mapped_column(Text, nullable=True)  # matcher's `detail`, e.g. ambiguity explanation
+
+    # Plan-time snapshot, split so FK resolution can be safely redone at
+    # execution time against real ids rather than the placeholder ids
+    # build_plan() uses for "will be created" dependencies (see planner.py's
+    # module docstring). payload_json holds only non-FK, non-custom fields —
+    # final as-is, safe to reuse verbatim. fk_refs_json is {field_name:
+    # source_fk_id} for `field_map` (required/optional, non-deferred)
+    # dependencies; the executor re-resolves this against the REAL id_map
+    # immediately before the create/update call, which is always possible by
+    # then (topological order guarantees the dependency was itself already
+    # processed for real). deferred_fk_json is the same shape but for
+    # `deferred_field_map` fields (primary_ip4, virtual chassis master, ...)
+    # — these are NEVER attempted at create/update time, always via a
+    # MigrationJobPatch instead.
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    fk_refs_json: Mapped[str] = mapped_column(Text, default="{}")
+    deferred_fk_json: Mapped[str] = mapped_column(Text, default="{}")
+    dropped_custom_fields_json: Mapped[str] = mapped_column(Text, default="[]")  # list[str], for the report's warnings
+
+    target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # known immediately for map; filled in on create
+    target_natural_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    execution_status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/done/error/rolled_back/rollback_error
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class MigrationJobPatch(Base):
+    """
+    One second-pass FK fix-up, for the fields build_payload() had to defer
+    because the object they reference hadn't been created/mapped yet at the
+    time this row's parent MigrationJobItem was processed (the circular-
+    reference case: a device's primary_ip4, a virtual chassis' master, ...).
+    Executed in phase `patch`, after every MigrationJobItem in phase
+    `primary` has reached a terminal execution_status.
+    """
+    __tablename__ = "migration_job_patches"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    job_id: Mapped[str] = mapped_column(String(36), ForeignKey("migration_jobs.id"), nullable=False, index=True)
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    object_type: Mapped[str] = mapped_column(String(64), nullable=False)  # the type being patched, e.g. "dcim.device"
+    source_id: Mapped[int] = mapped_column(Integer, nullable=False)  # source object whose target counterpart gets patched
+
+    patch_fields_json: Mapped[str] = mapped_column(Text, default="{}")  # {field_name: source_fk_id}, resolved through the id map at execution time
+    # Polymorphic FK fields: {field_name: {"type": dep_type_key, "id": source_fk_id}}.
+    # The type is determined at plan time from the discriminator field; resolution happens at patch time.
+    polymorphic_patch_fields_json: Mapped[str] = mapped_column(Text, default="{}")
+
+    execution_status: Mapped[str] = mapped_column(String(16), default="pending")
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

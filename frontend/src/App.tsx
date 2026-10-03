@@ -13,6 +13,7 @@ import SyslogPage from "./pages/SyslogPage";
 import FleetPage from "./pages/FleetPage";
 import AccessControlPage from "./pages/AccessControlPage";
 import TenantPermissionsPage from "./pages/TenantPermissionsPage";
+import MigrationPage from "./pages/MigrationPage";
 import LoginScreen from "./pages/LoginScreen";
 import { authApi, AuthMeResponse } from "./api/client";
 import { AccessContext, makeAccessValue } from "./contexts/AccessContext";
@@ -72,6 +73,9 @@ export default function App() {
             <NavLink to="/bulk-import" className={({ isActive }) => (isActive ? "active" : "")}>
               Bulk Import
             </NavLink>
+            <NavLink to="/migration" className={({ isActive }) => (isActive ? "active" : "")}>
+              Data Migration
+            </NavLink>
             <NavLink to="/drift" className={({ isActive }) => (isActive ? "active" : "")}>
               Drift
             </NavLink>
@@ -116,6 +120,7 @@ export default function App() {
             <Route path="/custom-fields" element={<CustomFieldsPage />} />
             <Route path="/tenant-permissions" element={<TenantPermissionsPage />} />
             <Route path="/bulk-import" element={<BulkImportPage />} />
+            <Route path="/migration" element={<MigrationPage />} />
             <Route path="/drift" element={<DriftPage />} />
             <Route path="/audit" element={<AuditLogPage />} />
             <Route path="/syslog" element={<SyslogPage />} />
