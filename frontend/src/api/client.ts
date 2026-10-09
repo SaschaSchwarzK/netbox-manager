@@ -772,6 +772,8 @@ export interface CustomFieldsTemplateFile {
   // Custom fields use NetBox's canonical `object_types` key.
   payload: { custom_fields: Record<string, any>[]; custom_field_choice_sets: Record<string, any>[] };
   open_pr?: { number: number; url: string } | null;
+  format_supported: boolean;
+  unsupported_reason?: string | null;
 }
 
 export interface ImportCandidate {
@@ -878,10 +880,22 @@ export interface ReferenceDataKind {
   label: string; fields: string[]; json_schema: Record<string, any>; file: string;
 }
 export interface ReferenceDataRegistry { push_order: string[]; kinds: Record<string, ReferenceDataKind>; }
+export interface ReferenceDataImportScan {
+  payload: { items: Record<string, any>[] };
+  diff: {
+    missing_on_instance: string[];
+    extra_on_instance: string[];
+    changed: { name: string; field_changes: FieldLevelChange[] }[];
+  };
+}
 export const referenceDataApi = {
   schema: (targetId: string) => request<ReferenceDataRegistry>(`/repos/${targetId}/reference-data/schema`),
   get: (targetId: string, kind: string) => request<{ exists: boolean; sha?: string; payload: { items: Record<string, any>[] } }>(`/repos/${targetId}/reference-data/${kind}/file`),
   save: (targetId: string, kind: string, data: Record<string, any>) => request<SaveResult>(`/repos/${targetId}/reference-data/${kind}/file`, { method: "PUT", body: JSON.stringify(data) }),
+  importScan: (targetId: string, kind: string, instance_id: string) => request<ReferenceDataImportScan>(
+    `/repos/${targetId}/reference-data/${kind}/import-scan`, {
+      method: "POST", body: JSON.stringify({ instance_id }),
+    }),
   push: (targetId: string, data: Record<string, any>) => request<{ target: string; status: string; detail?: string; warnings?: string[] }[]>(`/repos/${targetId}/reference-data/push`, { method: "POST", body: JSON.stringify(data) }),
 };
 

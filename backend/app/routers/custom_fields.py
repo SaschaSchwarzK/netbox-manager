@@ -99,7 +99,16 @@ def get_template(target_id: str, db: Session = Depends(get_db), ctx: AccessConte
     try:
         normalized = _normalized_template(result["payload"])
     except Exception as exc:
-        raise HTTPException(422, f"Repository custom-fields template is invalid: {exc}")
+        return schemas.CustomFieldsTemplateOut(
+            repo_target_id=target_id,
+            path=path,
+            exists=True,
+            sha=result["sha"],
+            payload=result["payload"],
+            open_pr=open_pr,
+            format_supported=False,
+            unsupported_reason=str(exc),
+        )
     return schemas.CustomFieldsTemplateOut(
         repo_target_id=target_id, path=path, exists=True, sha=result["sha"], payload=normalized, open_pr=open_pr
     )
