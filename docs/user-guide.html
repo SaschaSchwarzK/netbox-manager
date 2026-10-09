@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-user-guide" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.10.2">
+<title data-rh="true">NetBox Manager User Guide | NetBox Manager</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://saschaschwarzk.github.io/netbox-manager/docs/user-guide"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="NetBox Manager User Guide | NetBox Manager"><meta data-rh="true" name="description" content="This guide explains the day-to-day workflows in NetBox Manager. It is intended for viewers,"><meta data-rh="true" property="og:description" content="This guide explains the day-to-day workflows in NetBox Manager. It is intended for viewers,"><link data-rh="true" rel="icon" href="/netbox-manager/img/favicon.svg"><link data-rh="true" rel="canonical" href="https://saschaschwarzk.github.io/netbox-manager/docs/user-guide"><link data-rh="true" rel="alternate" href="https://saschaschwarzk.github.io/netbox-manager/docs/user-guide" hreflang="en"><link data-rh="true" rel="alternate" href="https://saschaschwarzk.github.io/netbox-manager/docs/user-guide" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"NetBox Manager User Guide","item":"https://saschaschwarzk.github.io/netbox-manager/docs/user-guide"}]}</script><link rel="stylesheet" href="/netbox-manager/assets/css/styles.b6e98839.css">
+<script src="/netbox-manager/assets/js/runtime~main.deb26da5.js" defer="defer"></script>
+<script src="/netbox-manager/assets/js/main.64613a45.js" defer="defer"></script>
+</head>
+<body>
+<svg style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||"light"),document.documentElement.setAttribute("data-theme-choice",t||"light")}(),function(){try{const c=new URLSearchParams(window.location.search).entries();for(var[t,e]of c)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/netbox-manager/"><b class="navbar__title text--truncate">NetBox Manager</b></a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/netbox-manager/docs/user-guide">User guide</a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><a href="https://github.com/SaschaSchwarzK/netbox-manager" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div><div class="navbarSearchContainer_Bca1"></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" href="/netbox-manager/docs/user-guide"><span class="linkLabel_WmDU">NetBox Manager User Guide</span></a></li></ul></nav></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/netbox-manager/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">NetBox Manager User Guide</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>NetBox Manager User Guide</h1></header>
+<p>This guide explains the day-to-day workflows in NetBox Manager. It is intended for viewers,
+editors, resource administrators, and application administrators. Deployment and environment
+configuration remain documented in the project <a href="https://github.com/SaschaSchwarzK/netbox-manager/blob/develop/README.md" target="_blank" rel="noopener noreferrer" class="">README</a>.</p>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>warning</div><div class="admonitionContent_BuS1"><p><strong>Development software — use at your own risk.</strong> NetBox Manager is under active development and
+may contain defects that cause unintended configuration changes or data loss. Before using any
+feature, create and verify current backups of every NetBox instance and other affected data, and
+make sure those backups can be restored. The data-migration feature is still under testing; test
+each migration in a non-production environment and review its dry-run plan before production use.</p></div></div>
+<p><img decoding="async" loading="lazy" alt="NetBox Manager application overview" src="/netbox-manager/assets/images/application-overview-4e564c96135583c56f8685c1114a454e.png" width="2191" height="998" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="1-roles-and-permissions">1. Roles and permissions<a href="#1-roles-and-permissions" class="hash-link" aria-label="Direct link to 1. Roles and permissions" title="Direct link to 1. Roles and permissions" translate="no">​</a></h2>
+<p>Your permissions come from your identity-provider groups and the access mappings configured by
+an application administrator.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Role</th><th>Typical capabilities</th></tr></thead><tbody><tr><td>Viewer</td><td>Search and inspect visible resources, fleet health, drift, audit records, and templates</td></tr><tr><td>Editor</td><td>Viewer capabilities plus template editing, imports, diff previews, and ordinary pushes</td></tr><tr><td>Resource admin</td><td>Administer specifically assigned instances or GitHub targets and satisfy approval-gated pushes for assigned instances</td></tr><tr><td>App admin</td><td>Manage access mappings and create or remove NetBox instances and GitHub targets</td></tr></tbody></table>
+<p>Resource visibility is independent of role. A high role does not reveal an instance or GitHub
+target that is scoped to other groups.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="2-signing-in">2. Signing in<a href="#2-signing-in" class="hash-link" aria-label="Direct link to 2. Signing in" title="Direct link to 2. Signing in" translate="no">​</a></h2>
+<p>Depending on the deployment, the sign-in screen can offer:</p>
+<ul>
+<li class=""><strong>Sign in with SSO</strong> for the configured OIDC identity provider.</li>
+<li class=""><strong>Break-glass local administrator login</strong> for recovery when the identity provider is unavailable.</li>
+</ul>
+<p>The local account is a full application administrator and should only be used for recovery.
+Authentication is enforced by default. An intentionally open deployment must explicitly set
+<code>AUTHENTICATION_DISABLED=True</code>; that mode also disables authorization and grants unrestricted
+access to every request.</p>
+<blockquote>
+<p><strong>Screenshot placeholder:</strong> Login screen showing SSO and local-admin options.<br>
+Suggested file: <code>docs/images/user-guide/login.png</code></p>
+</blockquote>
+<p>After signing in, your name, effective role, groups, and sign-out button appear at the bottom of
+the sidebar.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="3-configure-netbox-instances">3. Configure NetBox instances<a href="#3-configure-netbox-instances" class="hash-link" aria-label="Direct link to 3. Configure NetBox instances" title="Direct link to 3. Configure NetBox instances" translate="no">​</a></h2>
+<p>Open <strong>NetBox Instances</strong> to view the instances available to you.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="add-an-instance">Add an instance<a href="#add-an-instance" class="hash-link" aria-label="Direct link to Add an instance" title="Direct link to Add an instance" translate="no">​</a></h3>
+<p>Application administrators can select <strong>Add instance</strong> and provide:</p>
+<ol>
+<li class="">A unique display name.</li>
+<li class="">The NetBox base URL, such as <code>https://netbox.example.com</code>.</li>
+<li class="">An API token.</li>
+<li class="">SSL verification preference.</li>
+<li class="">Optional description and comma-separated tags.</li>
+<li class="">Whether an approved, merged pull request is required before publishing.</li>
+</ol>
+<p>Use <strong>Test connection</strong> before saving. The token is encrypted at rest and is never displayed
+again.</p>
+<p><img decoding="async" loading="lazy" alt="Create a NetBox instance" src="/netbox-manager/assets/images/instance-create-09e1869e18350900543f18383b25147b.png" width="2064" height="1158" class="img_ev3q"></p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="edit-an-instance">Edit an instance<a href="#edit-an-instance" class="hash-link" aria-label="Direct link to Edit an instance" title="Direct link to Edit an instance" translate="no">​</a></h3>
+<p>Select <strong>Edit</strong> beside an instance you administer. The API-token field is intentionally empty;
+leave it empty to retain the current token or enter a new token to rotate it. In edit mode,
+<strong>Test connection</strong> also reuses the stored token when the field is empty.</p>
+<p>Only application administrators can remove instances.</p>
+<p><img decoding="async" loading="lazy" alt="NetBox instance list and actions" src="/netbox-manager/assets/images/instance-list-5d480d61f7eb45ec39d10a443a252af0.png" width="1899" height="737" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="4-configure-github-targets">4. Configure GitHub targets<a href="#4-configure-github-targets" class="hash-link" aria-label="Direct link to 4. Configure GitHub targets" title="Direct link to 4. Configure GitHub targets" translate="no">​</a></h2>
+<p>A GitHub target identifies the repository used as the source of truth for YAML files. Open
+<strong>GitHub Targets</strong> to add or edit one.</p>
+<p><img decoding="async" loading="lazy" alt="GitHub targets list and actions" src="/netbox-manager/assets/images/github-target-list-aa0d665bcc331f9b9794723545793a70.png" width="2008" height="749" class="img_ev3q"></p>
+<p>Enter a unique name, repository in <code>owner/repo</code> form, branch, device-type path pattern,
+custom-fields template path, reference-data path, and a personal access token with suitable
+repository access. The reference-data path defaults to <code>reference-data</code>. Test the connection
+before saving.</p>
+<p>When editing, leave the PAT empty to retain it. Changing the repository, branch, or path changes
+where future reads and writes occur; existing files are not moved automatically.</p>
+<p><img decoding="async" loading="lazy" alt="Configure a GitHub target" src="/netbox-manager/assets/images/github-target-aa31512b35355049cf577d5c0165b298.png" width="2068" height="1189" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="5-find-infrastructure-objects">5. Find infrastructure objects<a href="#5-find-infrastructure-objects" class="hash-link" aria-label="Direct link to 5. Find infrastructure objects" title="Direct link to 5. Find infrastructure objects" translate="no">​</a></h2>
+<p>Use <strong>Search</strong> to query the visible NetBox instances for devices, virtual machines, virtual
+device contexts, IP addresses, prefixes, and MAC addresses. Results are grouped by instance, so
+an unreachable instance does not prevent results from healthy instances appearing.</p>
+<p><img decoding="async" loading="lazy" alt="Cross-instance search results" src="/netbox-manager/assets/images/search-results-6ccb7c80a1c73bf14fb8e0195f941450.png" width="2068" height="780" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="6-work-with-device-types">6. Work with device types<a href="#6-work-with-device-types" class="hash-link" aria-label="Direct link to 6. Work with device types" title="Direct link to 6. Work with device types" translate="no">​</a></h2>
+<p>Open <strong>Device Types</strong>, select a GitHub target, and choose an existing YAML definition or start a
+new one. The editor separates base attributes and component types into tabs and shows the
+resulting YAML.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="create-or-edit">Create or edit<a href="#create-or-edit" class="hash-link" aria-label="Direct link to Create or edit" title="Direct link to Create or edit" translate="no">​</a></h3>
+<ol>
+<li class="">Fill in the manufacturer, model, slug, and other base attributes.</li>
+<li class="">Add interfaces, ports, bays, and other components in their corresponding tabs.</li>
+<li class="">Set values for any custom fields scoped to &quot;Device type&quot; in the <strong>Custom Fields</strong> tab (the
+fields themselves are defined in the shared template — see step 8).</li>
+<li class="">Review the YAML preview.</li>
+<li class="">Enter or review the commit message and pull-request description.</li>
+<li class="">Save to create or update the pull request.</li>
+</ol>
+<p>All saves follow the pull-request workflow. Repeated saves for a file with an open pull request
+continue updating that pull request.</p>
+<p><img decoding="async" loading="lazy" alt="Device-type editor" src="/netbox-manager/assets/images/device-type-editor-dc5eb7624625fa8954d5ca4e34727e6d.png" width="1879" height="1164" class="img_ev3q"></p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="preview-and-publish">Preview and publish<a href="#preview-and-publish" class="hash-link" aria-label="Direct link to Preview and publish" title="Direct link to Preview and publish" translate="no">​</a></h3>
+<p>Before publishing, select one or more visible instances directly or by tag. Use <strong>Preview diff</strong>
+to compare the GitHub definition with each instance, then publish when the changes are correct.</p>
+<p>Instances marked as requiring approval accept a push only when the current file came from a
+merged pull request with an approving review. An admin mapping for that specific instance is
+sufficient for the admin portion of this gate.</p>
+<p><img decoding="async" loading="lazy" alt="Preview and publish a device type" src="/netbox-manager/assets/images/device-type-publish-1665bbf0e927f3329f21fddec490aec3.png" width="1547" height="933" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="7-bulk-import-device-types">7. Bulk import device types<a href="#7-bulk-import-device-types" class="hash-link" aria-label="Direct link to 7. Bulk import device types" title="Direct link to 7. Bulk import device types" translate="no">​</a></h2>
+<p>Use <strong>Bulk Import</strong> to bring multiple definitions into a target repository from either a GitHub
+library or a NetBox instance.</p>
+<ol>
+<li class="">Select the source type and source.</li>
+<li class="">Scan for available device types.</li>
+<li class="">Filter and select the definitions to import.</li>
+<li class="">Review the destination target and pull-request details.</li>
+<li class="">Import the selection.</li>
+</ol>
+<p>The selected files are submitted in one shared branch and pull request. Existing destination
+files are skipped rather than overwritten. Publishing imported files to NetBox is a separate
+step after review and merge.</p>
+<p><img decoding="async" loading="lazy" alt="Bulk-import device types" src="/netbox-manager/assets/images/bulk-import-6cd55c31207a58a6a3b7fa56218a50c1.png" width="1746" height="1164" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="8-manage-custom-fields">8. Manage custom fields<a href="#8-manage-custom-fields" class="hash-link" aria-label="Direct link to 8. Manage custom fields" title="Direct link to 8. Manage custom fields" translate="no">​</a></h2>
+<p>The <strong>Custom Fields</strong> page manages the target&#x27;s shared custom-fields YAML template. You can edit
+custom fields and choice sets, import selected differences from a NetBox instance, preview drift,
+and push the template to selected instances.</p>
+<p>Choice sets are published before fields because fields may reference them. Existing fields are
+changed only when overwrite is selected.</p>
+<p>A custom field&#x27;s <strong>content types</strong> determine where it can be used. Give it &quot;Device type&quot;
+(<code>dcim.devicetype</code>) to make it available as a value on device types in the editor — see step 6.</p>
+<p><img decoding="async" loading="lazy" alt="Custom-fields template editor" src="/netbox-manager/assets/images/custom-fields-2980ae8991c9cbbf2a59422c22e74d04.png" width="1731" height="1182" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="9-manage-reference-data">9. Manage reference data<a href="#9-manage-reference-data" class="hash-link" aria-label="Direct link to 9. Manage reference data" title="Direct link to 9. Manage reference data" translate="no">​</a></h2>
+<p>Open <strong>Reference Data</strong>, choose a GitHub target, and select a kind: manufacturers, tags, config
+templates, export templates, device roles, platforms, webhooks, event rules, or config contexts.
+Each kind is stored in its own YAML file under the target&#x27;s reference-data path, which defaults to
+<code>reference-data/</code>. Use either the schema-generated form or YAML view; saving opens a new pull
+request or updates the existing one.</p>
+<p>You can import a kind from a visible NetBox instance, preview differences, and push it to selected
+instances. Pushes create missing objects, update existing objects only when <strong>Overwrite</strong> is
+selected, follow dependency order, and never delete objects. The same resource-scoped roles and
+approved-PR gate used by Custom Fields apply here. Reference-data comparison is currently
+on-demand; it is not part of scheduled drift checks.</p>
+<p>Keep these safety rules in mind:</p>
+<ul>
+<li class="">Data-source-synced objects and fields are omitted.</li>
+<li class="">Webhook secrets are never exported. Sensitive header values appear as <code>&lt;redacted&gt;</code> and are
+skipped during push; webhook URLs containing user information or query strings are rejected.</li>
+<li class="">New event rules remain disabled unless <strong>Enable new event rules</strong> is selected for the push.</li>
+<li class="">Config-context assignments support sites, roles, platforms, device-type slugs, tags, and tenants.
+Assignment types that cannot be resolved reliably by name are omitted.</li>
+</ul>
+<p><img decoding="async" loading="lazy" alt="Reference Data" src="/netbox-manager/assets/images/reference-data-a5f952d838c47ae2ee568e4e3f8f3482.png" width="1384" height="708" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="10-monitor-fleet-health-and-drift">10. Monitor fleet health and drift<a href="#10-monitor-fleet-health-and-drift" class="hash-link" aria-label="Direct link to 10. Monitor fleet health and drift" title="Direct link to 10. Monitor fleet health and drift" translate="no">​</a></h2>
+<p>Use <strong>Fleet</strong> to check NetBox reachability, versions, installed plugins, response time, and
+available token-expiry information. Resolve connectivity or credential warnings before a large
+publish operation.</p>
+<p>Use <strong>Drift</strong> to see device types and custom-fields templates that differ from their GitHub source.
+This covers device types NetBox Manager has pushed before, and also device types that were created
+directly in a NetBox instance by hand — as long as their manufacturer and slug match something
+already committed to the repo, they&#x27;re picked up automatically. Select <strong>Check all now</strong> for an
+on-demand refresh; otherwise the background schedule refreshes the data periodically when enabled
+by the administrator.</p>
+<p><img decoding="async" loading="lazy" alt="Fleet health dashboard" src="/netbox-manager/assets/images/fleet-6d4a67c652cde0d83495f50c77c0a180.png" width="1746" height="659" class="img_ev3q"></p>
+<p><img decoding="async" loading="lazy" alt="Drift results" src="/netbox-manager/assets/images/drift-1b7b349f6454cb5bbee27082d8cea07c.png" width="1740" height="626" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="11-migrate-data-between-netbox-instances">11. Migrate data between NetBox instances<a href="#11-migrate-data-between-netbox-instances" class="hash-link" aria-label="Direct link to 11. Migrate data between NetBox instances" title="Direct link to 11. Migrate data between NetBox instances" translate="no">​</a></h2>
+<div class="theme-admonition theme-admonition-danger admonition_xJq3 alert alert--danger"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M5.05.31c.81 2.17.41 3.38-.52 4.31C3.55 5.67 1.98 6.45.9 7.98c-1.45 2.05-1.7 6.53 3.53 7.7-2.2-1.16-2.67-4.52-.3-6.61-.61 2.03.53 3.33 1.94 2.86 1.39-.47 2.3.53 2.27 1.67-.02.78-.31 1.44-1.13 1.81 3.42-.59 4.78-3.42 4.78-5.56 0-2.84-2.53-3.22-1.25-5.61-1.52.13-2.03 1.13-1.89 2.75.09 1.08-1.02 1.8-1.86 1.33-.67-.41-.66-1.19-.06-1.78C8.18 5.31 8.68 2.45 5.05.32L5.03.3l.02.01z"></path></svg></span>danger</div><div class="admonitionContent_BuS1"><p><strong>Data migration is still under testing.</strong> It writes directly to the target NetBox instance and
+rollback is best-effort: updated objects are not restored automatically. Back up the source and
+target instances, verify that the backups are usable, and test the migration outside production
+before proceeding. Use this feature at your own risk.</p></div></div>
+<p>Open <strong>Data Migration</strong>, choose the source and target instances, then select the object types and
+tenant scope to migrate. Use <strong>Preview migration (dry run)</strong> first: the plan shows which objects
+will be created, updated, mapped, skipped, or require manual resolution. Review ambiguous matches
+and conflict-policy overrides before confirming execution.</p>
+<p><img decoding="async" loading="lazy" alt="Data Migration Plan" src="/netbox-manager/assets/images/data-migration-plan1-d623566f2489a5e64939c77664c59b71.png" width="1387" height="854" class="img_ev3q"></p>
+<p>The available infrastructure types include power panels and feeds, providers and circuits,
+circuit terminations, L2VPNs and their interface/VLAN terminations, virtual device contexts
+(VDCs), and cables. Dependencies are included automatically. VDCs are created after their device
+and before its interfaces, so each interface&#x27;s VDC assignments can be written in the same request.
+VDC primary IPs are applied afterward. Cable endpoint objects are migrated before their cables;
+cables are matched by their resolved endpoint sets rather than by their optional label. With a
+tenant filter, otherwise-tenantless cables attached to an in-scope device are included as well.
+If such a cable terminates on an object explicitly owned by another tenant, that dependency chain
+and the cable are excluded; the migration will not pull a foreign tenant&#x27;s circuit into scope.</p>
+<p>VLAN matching first compares VID and VLAN group, then VID and site. If a broad lookup matches more
+than one target VLAN, planning continues with the more specific strategy. If it is still ambiguous,
+an exact, unique match of the VLAN&#x27;s assigned prefix set is used. Anything less certain remains in
+<strong>Mapping review</strong> for an explicit choice.</p>
+<p><img decoding="async" loading="lazy" alt="Data Migration Plan Objects" src="/netbox-manager/assets/images/data-migration-plan2-2e8ca1be28f187136ed7aed45887b653.png" width="1141" height="1157" class="img_ev3q"></p>
+<p>After planning, the execution controls are shown above the plan summary. Review the plan below,
+return to the top, select the confirmation checkbox, and choose <strong>Run migration</strong>. The same top
+control area shows <strong>Cancel</strong>, retry, rollback, and start-over actions when applicable.</p>
+<p><img decoding="async" loading="lazy" alt="Plan results" src="/netbox-manager/assets/images/data-migration-plan-result1-b373327e333d54f902af6844717ba6af.png" width="1159" height="887" class="img_ev3q"></p>
+<p>There might be errors and warnings:</p>
+<p><img decoding="async" loading="lazy" alt="Plan results" src="/netbox-manager/assets/images/data-migration-plan-result2-314b96dcbf2290da588aee980d655c8c.png" width="980" height="241" class="img_ev3q"></p>
+<p>The mapping to existing obejcts can be viewed and also corrected.</p>
+<p><img decoding="async" loading="lazy" alt="Plan results" src="/netbox-manager/assets/images/data-migration-plan-result3-06d1fe88f642d80b5e92c6e3479af3a9.png" width="1149" height="850" class="img_ev3q"></p>
+<p>For missing mappings a mapping can be added manually.</p>
+<p><img decoding="async" loading="lazy" alt="Plan results" src="/netbox-manager/assets/images/data-migration-plan-result4-d875205f7c7dbaff6296c4ec7a75132d.png" width="1151" height="137" class="img_ev3q"></p>
+<p>A report of the migration plan can be downloaded to dcoumentation or review.</p>
+<p><img decoding="async" loading="lazy" alt="Plan results" src="/netbox-manager/assets/images/data-migration-plan-result5-620f9baeef0b5bdf1ce065abc7f5219b.png" width="1148" height="598" class="img_ev3q"></p>
+<p>When <strong>Tag migrated objects</strong> is enabled, the migration creates or reuses two tags on the target
+before migrating any data:</p>
+<ul>
+<li class=""><code>migrated-from-&lt;source&gt;-created</code> marks objects created by the migration.</li>
+<li class=""><code>migrated-from-&lt;source&gt;-changed</code> marks existing objects changed by the migration.</li>
+</ul>
+<p><img decoding="async" loading="lazy" alt="Migration Tags" src="/netbox-manager/assets/images/migration-tags-d7d049e7a325ebb413b1fcfd09f9631c.png" width="1256" height="104" class="img_ev3q"></p>
+<p>The appropriate tag is included in the object&#x27;s original create or update request. Existing tags
+from the migration payload are preserved, and mapped or skipped objects are not tagged. If either
+marker tag cannot be prepared, execution continues and the job records a warning. A rollback
+deletes only successfully created objects; it does not restore updated objects and retains both
+marker-tag definitions.</p>
+<p>When the review is completed the migration can be started.</p>
+<p><img decoding="async" loading="lazy" alt="Migration Tags" src="/netbox-manager/assets/images/start-migration-f7cc6957d8244b67f76c0ec6a7524b4f.png" width="1151" height="176" class="img_ev3q"></p>
+<p>After the migration the is completed the table and the report will be updated:</p>
+<p><img decoding="async" loading="lazy" alt="Migration Tags" src="/netbox-manager/assets/images/data-migration-result-56fb9b10605121ec38b96027c5baecca.png" width="1148" height="1023" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="12-export-tenant-data">12. Export tenant data<a href="#12-export-tenant-data" class="hash-link" aria-label="Direct link to 12. Export tenant data" title="Direct link to 12. Export tenant data" translate="no">​</a></h2>
+<p>Open <strong>Data Export</strong>, choose one visible NetBox instance and tenant, then select Devices, Virtual
+Device Contexts, and/or Virtual Machines. Fixed identity fields are always included. Optional
+standard fields and every applicable custom field are discovered from the selected instance. Use
+the custom-field filter for long lists, then choose CSV or Excel and select <strong>Start export</strong>.</p>
+<p>CSV uses UTF-8 with a BOM and supports comma or semicolon delimiters. Multiple selected object
+types are packaged as separate CSV files in a ZIP. Excel produces one worksheet per object type.
+All cells are protected against spreadsheet-formula injection. Region means the site&#x27;s directly
+assigned region; parent-region ancestry is not expanded.</p>
+<p>Jobs run in the background and are visible only to their creator. The Jobs tab shows progress,
+completion, and expiry; it also provides download, cancellation, and deletion actions when they
+apply. Files expire seven days after completion by default, jobs do not resume after an application
+restart, and administrator-configured row, concurrency, and disk-space limits may reject or stop a
+large export. Authentication-disabled deployments share the owner <code>anonymous</code>, so all users of that
+open deployment share its jobs.</p>
+<p><img decoding="async" loading="lazy" alt="Data Export" src="/netbox-manager/assets/images/data-export-79876fb1b945496bc55c63fd7f03482e.png" width="1390" height="1146" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="13-review-audit-and-syslog-status">13. Review audit and syslog status<a href="#13-review-audit-and-syslog-status" class="hash-link" aria-label="Direct link to 13. Review audit and syslog status" title="Direct link to 13. Review audit and syslog status" translate="no">​</a></h2>
+<p>The <strong>Audit Log</strong> records GitHub saves and NetBox pushes, including the actor, target, status, and
+details. Failed and rejected actions are retained as well as successful actions.</p>
+<p>The <strong>Syslog</strong> page shows the configured forwarding destination and can send a test message. Its
+settings are read-only in the UI and must be changed through deployment configuration.</p>
+<p><img decoding="async" loading="lazy" alt="Audit log" src="/netbox-manager/assets/images/audit-log-2d0bbf888aef444c2456fb942e5eea62.png" width="1728" height="646" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="14-manage-access-mappings">14. Manage access mappings<a href="#14-manage-access-mappings" class="hash-link" aria-label="Direct link to 14. Manage access mappings" title="Direct link to 14. Manage access mappings" translate="no">​</a></h2>
+<p>This page is visible only to application administrators. Each row maps one OIDC group to a role
+and a scope:</p>
+<ul>
+<li class=""><strong>All resources</strong> grants the role globally but does not override resource visibility rules.</li>
+<li class=""><strong>NetBox instance</strong> or <strong>GitHub target</strong> scopes the row to one resource and makes that group one
+of the groups allowed to see it.</li>
+<li class=""><strong>Use default role</strong> creates a visibility-only grant for a concrete resource.</li>
+</ul>
+<p>A resource with no concrete mappings is visible to everyone. Adding its first concrete mapping
+makes it visible only to groups mapped to that resource. Keep at least one permanent bootstrap
+admin group configured so administrators can recover from mapping mistakes.</p>
+<p><img decoding="async" loading="lazy" alt="Access mappings" src="/netbox-manager/assets/images/access-mappings-72f0759c4a18120eb08d91d400b7df0d.png" width="1714" height="712" class="img_ev3q"></p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="15-common-problems">15. Common problems<a href="#15-common-problems" class="hash-link" aria-label="Direct link to 15. Common problems" title="Direct link to 15. Common problems" translate="no">​</a></h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Symptom</th><th>What to check</th></tr></thead><tbody><tr><td>A resource is missing</td><td>Your group may not have a visibility mapping for that resource</td></tr><tr><td>Edit or create returns 403</td><td>Creating/removing needs app admin; editing needs app admin or admin on that resource</td></tr><tr><td>Test connection fails</td><td>Confirm URL/repository, token permissions, SSL trust, and network reachability</td></tr><tr><td>Approval-gated publish is blocked</td><td>Confirm the current content came from a merged PR with an approving review</td></tr><tr><td>A reference-data object was not updated</td><td>Select <strong>Overwrite</strong>; pushes create missing objects but preserve existing ones by default</td></tr><tr><td>A reference-data webhook value is missing</td><td>Secrets and redacted headers are deliberately omitted; enter them directly in NetBox</td></tr><tr><td>An export will not start or complete</td><td>Check the per-user/concurrent-job limits, row cap, free space in the export volume, and NetBox connectivity</td></tr><tr><td>A token field is blank while editing</td><td>This is expected; leave it blank to keep the stored secret</td></tr><tr><td>GitHub files appear to have moved after editing a target</td><td>Changing repo/branch/path changes the lookup location but does not move existing files</td></tr><tr><td>Local login returns 429</td><td>Wait for the five-minute per-process failure window or restart the single backend process</td></tr></tbody></table>
+<p>For deployment-level failures, see <a href="https://github.com/SaschaSchwarzK/netbox-manager/blob/develop/README.md#troubleshooting" target="_blank" rel="noopener noreferrer" class="">Troubleshooting in the README</a>.</p></div><footer class="theme-doc-footer docusaurus-mt-lg"><div class="row margin-top--sm theme-doc-footer-edit-meta-row"><div class="col noPrint_WFHX"><a href="https://github.com/SaschaSchwarzK/netbox-manager/edit/develop/docs/.docs-build/user-guide.md" target="_blank" rel="noopener noreferrer" class="theme-edit-this-page"><svg fill="currentColor" height="20" width="20" viewBox="0 0 40 40" class="iconEdit_Z9Sw" aria-hidden="true"><g><path d="m34.5 11.7l-3 3.1-6.3-6.3 3.1-3q0.5-0.5 1.2-0.5t1.1 0.5l3.9 3.9q0.5 0.4 0.5 1.1t-0.5 1.2z m-29.5 17.1l18.4-18.5 6.3 6.3-18.4 18.4h-6.3v-6.2z"></path></g></svg>Edit this page</a></div><div class="col lastUpdated_JAkA"></div></div></footer></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#1-roles-and-permissions" class="table-of-contents__link toc-highlight">1. Roles and permissions</a></li><li><a href="#2-signing-in" class="table-of-contents__link toc-highlight">2. Signing in</a></li><li><a href="#3-configure-netbox-instances" class="table-of-contents__link toc-highlight">3. Configure NetBox instances</a><ul><li><a href="#add-an-instance" class="table-of-contents__link toc-highlight">Add an instance</a></li><li><a href="#edit-an-instance" class="table-of-contents__link toc-highlight">Edit an instance</a></li></ul></li><li><a href="#4-configure-github-targets" class="table-of-contents__link toc-highlight">4. Configure GitHub targets</a></li><li><a href="#5-find-infrastructure-objects" class="table-of-contents__link toc-highlight">5. Find infrastructure objects</a></li><li><a href="#6-work-with-device-types" class="table-of-contents__link toc-highlight">6. Work with device types</a><ul><li><a href="#create-or-edit" class="table-of-contents__link toc-highlight">Create or edit</a></li><li><a href="#preview-and-publish" class="table-of-contents__link toc-highlight">Preview and publish</a></li></ul></li><li><a href="#7-bulk-import-device-types" class="table-of-contents__link toc-highlight">7. Bulk import device types</a></li><li><a href="#8-manage-custom-fields" class="table-of-contents__link toc-highlight">8. Manage custom fields</a></li><li><a href="#9-manage-reference-data" class="table-of-contents__link toc-highlight">9. Manage reference data</a></li><li><a href="#10-monitor-fleet-health-and-drift" class="table-of-contents__link toc-highlight">10. Monitor fleet health and drift</a></li><li><a href="#11-migrate-data-between-netbox-instances" class="table-of-contents__link toc-highlight">11. Migrate data between NetBox instances</a></li><li><a href="#12-export-tenant-data" class="table-of-contents__link toc-highlight">12. Export tenant data</a></li><li><a href="#13-review-audit-and-syslog-status" class="table-of-contents__link toc-highlight">13. Review audit and syslog status</a></li><li><a href="#14-manage-access-mappings" class="table-of-contents__link toc-highlight">14. Manage access mappings</a></li><li><a href="#15-common-problems" class="table-of-contents__link toc-highlight">15. Common problems</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="footer__bottom text--center"><div class="footer__copyright">NetBox Manager documentation. Built with Docusaurus.</div></div></div></footer></div>
+</body>
+</html>
