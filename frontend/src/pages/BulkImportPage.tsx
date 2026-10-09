@@ -5,6 +5,7 @@ import {
   ndxApi,
 } from "../api/client";
 import ImagePreviewModal, { ActiveImagePreview } from "../components/ImagePreviewModal";
+import { useNavigate } from "react-router-dom";
 
 type SourceType = "ndx" | "github" | "netbox";
 type ObjectType = "device-types" | "module-types" | "rack-types";
@@ -85,6 +86,7 @@ function DeviceTypePreviewDetail({ preview, onPreviewImage }: {
 }
 
 export default function BulkImportPage() {
+  const navigate = useNavigate();
   const [targets, setTargets] = useState<GithubTarget[]>([]);
   const [selectedTarget, setSelectedTarget] = useState("");
   const [instances, setInstances] = useState<NetboxInstance[]>([]);
@@ -287,6 +289,7 @@ export default function BulkImportPage() {
         <div className="tabs" style={{ marginBottom: 12 }}>
           {(Object.keys(OBJECT_LABELS) as ObjectType[]).map((kind) => <button key={kind}
             className={objectType === kind ? "active" : ""} onClick={() => selectObjectType(kind)}>{OBJECT_LABELS[kind]}</button>)}
+          <button onClick={() => navigate("/reference-data")}>Reference Data</button>
         </div>
         <div className="tabs" style={{ marginBottom: 12 }}>
           <button disabled={objectType !== "device-types"} title={objectType !== "device-types" ? "NDX provides device types only" : undefined}

@@ -663,6 +663,8 @@ class CustomFieldsTemplateOut(BaseModel):
     sha: Optional[str] = None
     payload: dict[str, Any]
     open_pr: Optional[OpenPrInfo] = None
+    format_supported: bool = True
+    unsupported_reason: Optional[str] = None
 
 
 class SaveCustomFieldsRequest(BaseModel):

@@ -1,0 +1,35 @@
+.hero {
+  background: radial-gradient(circle at 85% 20%, rgba(90, 180, 220, 0.24), transparent 30%), linear-gradient(135deg, #102c41 0%, #194c6e 58%, #2e6f9e 100%);
+  color: #fff;
+  padding: 6.5rem 1.5rem;
+}
+
+.heroContent { margin: 0 auto; max-width: 920px; text-align: center; }
+.hero h1 { color: #fff; font-size: clamp(2.4rem, 6vw, 4.5rem); letter-spacing: -0.04em; line-height: 1.04; margin: 0 auto 1.5rem; max-width: 900px; }
+.eyebrow { color: #58b9e5; font-size: 0.8rem; font-weight: 800; letter-spacing: 0.14em; margin-bottom: 0.9rem; text-transform: uppercase; }
+.hero .eyebrow { color: #9bdcf8; }
+.intro { color: rgba(255, 255, 255, 0.86); font-size: 1.25rem; line-height: 1.7; margin: 0 auto; max-width: 760px; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.85rem; justify-content: center; margin-top: 2.25rem; }
+.section, .projectSection { padding: 5rem 1.5rem; }
+.sectionHeading { margin-bottom: 2.5rem; max-width: 720px; }
+.sectionHeading h2, .projectSection h2 { font-size: clamp(1.9rem, 4vw, 2.8rem); letter-spacing: -0.025em; }
+.grid { display: grid; gap: 1.25rem; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.card { border: 1px solid var(--ifm-color-emphasis-200); border-radius: 14px; box-shadow: 0 10px 30px rgba(15, 43, 63, 0.07); padding: 1.6rem; }
+.card h3 { font-size: 1.12rem; margin-bottom: 0.65rem; }
+.card p, .projectSection p { color: var(--ifm-color-emphasis-700); line-height: 1.7; margin-bottom: 0; }
+.projectSection { background: var(--ifm-color-emphasis-100); }
+.projectGrid { align-items: center; display: grid; gap: 3rem; grid-template-columns: 2fr 1fr; }
+.projectCards { display: grid; gap: 1rem; }
+.authorCard, .supportCard { background: var(--ifm-background-color); border-left: 4px solid var(--ifm-color-primary); border-radius: 8px; display: flex; flex-direction: column; padding: 1.5rem; }
+.authorCard span, .supportCard span { color: var(--ifm-color-emphasis-600); font-size: 0.85rem; margin-bottom: 0.4rem; }
+.authorCard strong { font-size: 1.2rem; margin-bottom: 0.35rem; }
+.supportCard { border-left-color: #58b9e5; }
+.supportCard strong { font-size: 1.05rem; margin-bottom: 0.5rem; }
+.supportCard small { color: var(--ifm-color-emphasis-600); line-height: 1.5; margin-top: 0.4rem; }
+
+@media (max-width: 900px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 650px) {
+  .hero { padding: 4.5rem 1.25rem; }
+  .grid, .projectGrid { grid-template-columns: 1fr; }
+  .section, .projectSection { padding: 3.5rem 1.25rem; }
+}

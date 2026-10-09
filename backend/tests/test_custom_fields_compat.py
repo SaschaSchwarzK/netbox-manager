@@ -4,7 +4,8 @@ import pytest
 import responses
 
 from app.customfield_schema import CustomFieldsTemplate
-from app.services import diff, netbox_client, netbox_customfields
+from app.routers import custom_fields
+from app.services import diff, github_repo, netbox_client, netbox_customfields
 
 
 def test_connection_reports_invalid_api_token_as_authentication_failure(monkeypatch):
@@ -43,6 +44,28 @@ def test_pre_4_content_types_is_rejected():
         CustomFieldsTemplate.model_validate({
             "custom_fields": [{"name": "asset_owner", "content_types": ["dcim.device"]}],
         })
+
+
+def test_repository_template_with_legacy_content_types_is_returned_as_unsupported(monkeypatch):
+    payload = {"custom_fields": [{"name": "asset_owner", "content_types": ["dcim.device"]}]}
+    target = SimpleNamespace(
+        id="target", pat_encrypted="encrypted", repo="owner/repo", branch="main",
+        custom_fields_path="custom-fields/template.yml",
+    )
+    monkeypatch.setattr(custom_fields, "_get_target", lambda *args: target)
+    monkeypatch.setattr(custom_fields.crypto, "decrypt", lambda value: "token")
+    monkeypatch.setattr(github_repo, "file_exists", lambda *args: True)
+    monkeypatch.setattr(github_repo, "resolve_working_branch", lambda *args: "main")
+    monkeypatch.setattr(github_repo, "get_file", lambda *args: {"sha": "abc123", "payload": payload})
+    monkeypatch.setattr(github_repo, "get_open_pr", lambda *args: None)
+
+    result = custom_fields.get_template("target", db=object(), ctx=object())
+
+    assert result.exists is True
+    assert result.sha == "abc123"
+    assert result.payload == payload
+    assert result.format_supported is False
+    assert "content_types is unsupported; use object_types" in result.unsupported_reason
 
 
 def test_custom_field_scope_order_does_not_cause_drift():

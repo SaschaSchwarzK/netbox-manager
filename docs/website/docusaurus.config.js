@@ -45,6 +45,7 @@ const config = {
     navbar: {
       title: 'NetBox Manager',
       items: [
+        { to: '/', label: 'Home', position: 'left' },
         { to: '/docs/user-guide', label: 'User guide', position: 'left' },
         { href: repoUrl, label: 'GitHub', position: 'right' },
       ],

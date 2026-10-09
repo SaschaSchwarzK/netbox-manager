@@ -161,6 +161,33 @@ export default function CustomFieldsPage() {
       </div>
     );
   }
+  if (file.format_supported === false) {
+    return (
+      <div>
+        <h1>Custom Fields</h1>
+        <div className="toolbar">
+          <select value={selectedTarget} onChange={(e) => setSelectedTarget(e.target.value)} style={{ maxWidth: 280 }}>
+            {targets.map((target) => (
+              <option key={target.id} value={target.id}>{target.name} ({target.repo}@{target.branch})</option>
+            ))}
+          </select>
+        </div>
+        <div className="card" role="status">
+          <h2>Unsupported custom-fields template</h2>
+          <p>
+            The repository file <code>{file.path}</code> exists, but its format is not supported by
+            this version of NetBox Manager. The file was not modified.
+          </p>
+          {file.unsupported_reason && <p className="mono">{file.unsupported_reason}</p>}
+          <p>
+            Templates for NetBox 4.6.8 and newer must use <code>object_types</code> instead of
+            <code>content_types</code>.
+          </p>
+          <button onClick={() => void loadFile()}>Retry</button>
+        </div>
+      </div>
+    );
+  }
 
   const updateFields = (rows: Record<string, any>[]) => {
     setFile({ ...file, payload: { ...file.payload, custom_fields: rows } });
@@ -655,7 +682,7 @@ export default function CustomFieldsPage() {
           )}
 
           <div className="card" style={{ marginTop: 8 }}>
-            <h2>Commit</h2>
+            <h2>Open pull request</h2>
             <p style={{ color: "var(--muted)", fontSize: 13, marginTop: -6 }}>
               Direct commits are disabled — saving always opens (or updates) a pull request for review.
             </p>

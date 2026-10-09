@@ -441,7 +441,7 @@ export default function DeviceTypeEditorPage() {
           )}
 
           <div className="card" style={{ marginTop: 8 }}>
-            <h2>Commit</h2>
+            <h2>Open pull request</h2>
             <p style={{ color: "var(--muted)", fontSize: 13, marginTop: -6 }}>
               Direct commits are disabled — saving always opens (or updates) a pull request for review.
             </p>

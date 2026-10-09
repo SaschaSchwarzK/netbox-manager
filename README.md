@@ -13,10 +13,8 @@ instances. Device types, custom fields, reference data, and tenant permission te
 GitHub as reviewable YAML; NetBox Manager keeps connection settings, job state, and audit history
 in a small local SQLite database.
 
-For application workflows and annotated screenshot placeholders, see the
-[NetBox Manager User Guide](docs/user-guide.md).
-Contributor setup, tests, builds, internal documentation, and publishing are covered in the
-[Development Guide](docs/internal/development.md).
+For application workflows and screenshots, see the
+[NetBox Manager User Guide](https://saschaschwarzk.github.io/netbox-manager/docs/user-guide).
 
 ## What NetBox Manager can do
 
@@ -459,3 +457,9 @@ Use the GitHub issue forms to [report a bug](https://github.com/SaschaSchwarzK/n
 or [request a feature](https://github.com/SaschaSchwarzK/netbox-manager/issues/new?template=feature_request.yml).
 Search existing issues first and never include API tokens, credentials, session cookies, or other
 sensitive information.
+
+## Support the project
+
+If NetBox Manager is useful to you, you can support its continued development with a voluntary
+donation via [PayPal](https://paypal.me/3dnerd). Donations are optional, do not purchase support or
+services, and do not change the terms of the project's MIT License.
