@@ -1,1 +1,0 @@
-"use strict";(self.webpackChunknetbox_manager_docs=self.webpackChunknetbox_manager_docs||[]).push([[634],{192(e,s,n){n.r(s),n.d(s,{default:()=>t});n(6540);var r=n(612),u=n(6025),a=n(4848);function t(){return(0,a.jsx)(r.rd,{to:(0,u.Ay)("/docs/user-guide")})}}}]);
