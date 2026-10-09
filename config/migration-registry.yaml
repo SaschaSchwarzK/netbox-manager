@@ -1,0 +1,1284 @@
+# Canonical registry for the instance-to-instance data migration feature.
+#
+# Kept deliberately separate from tenant-relations.yaml: that file answers
+# "what is this object type's path to Tenant" for the permission-template
+# feature; this file answers "how do we migrate this object type" (its
+# pynetbox endpoint, what it depends on and under which field name, how to
+# match it against an existing object on the target so we don't create
+# duplicates, and where to link to it in the NetBox UI for the migration
+# report).
+#
+# Wherever an object type also appears in tenant-relations.yaml, the
+# `tenant_relation` value here MUST match it exactly. This is enforced by
+# scripts/check_migration_registry_consistency.py and a pytest in
+# backend/tests/test_migration_registry.py, so the two files can't quietly
+# drift apart on a value they both describe.
+#
+# Schema per type:
+#   endpoint:        pynetbox path, e.g. "dcim.device_types" -> nb.dcim.device_types
+#   ui_path:         path segment under the NetBox web UI, e.g. "dcim/device-types"
+#     used to build "<base_url>/<ui_path>/<id>/" links in the migration report.
+#   selectable:      true if the user can pick this type directly in step 2 of
+#     the wizard. false means it only ever appears as an auto-included
+#     dependency. Universal and structurally parent-bound types may remain
+#     non-selectable when independent migration has no useful meaning.
+#   dependencies:    object types (registry keys) that MUST exist on the target
+#     before this type can be created. Pulled in transitively, referenced-only
+#     (only the specific objects actually referenced by selected data, not
+#     every object of that type on the source). The planner discovers these ids
+#     in a read-only pass before processing the resulting objects in topological
+#     dependency order.
+#   optional_dependencies: object types this type MAY reference (tenant,
+#     platform, rack, ...). Same referenced-only inclusion, but migrating the
+#     primary type never fails just because one of these is absent/skipped —
+#     the field is simply left blank on the target object.
+#   field_map:       {source JSON field name: dependency type key}, one entry
+#     for every type in `dependencies` and `optional_dependencies` (a type may
+#     appear as the value for more than one field, e.g. a hypothetical object
+#     with two ip-address fields; that's exactly why this is keyed by FIELD
+#     NAME rather than by type — the reverse shape can't represent that).
+#     Field names are NOT derived from the type name by convention (e.g. a
+#     device's role field is "role", not "device_role"; a module's bay field
+#     is "module_bay", not "modulebay") — this map is the single source of
+#     truth for the real NetBox field name.
+#   deferred_field_map: same shape as field_map ({field name: dependency type
+#     key}), but for FK fields deliberately EXCLUDED from the dependency
+#     graph because including them would create a cycle at the type level
+#     (e.g. a device's primary_ip4 points at an IP address, which may be
+#     assigned to an interface, which belongs back to that same device).
+#     These are never resolved inline during phase `primary` — they always
+#     go through build_payload's "defer" path and become a MigrationJobPatch,
+#     applied once every phase-`primary` item has reached a terminal state.
+#   polymorphic_field_map: for writable GenericForeignKey ID fields whose dependency type
+#     varies per object (e.g. ipam.ipaddress.assigned_object_id, which can point
+#     at either dcim.interface or virtualization.vminterface depending on the
+#     value of the sibling `assigned_object_type` field). Shape:
+#       {field_name: {discriminator_field: <sibling field>, type_values: {<discriminator_value>: <dep_type_key>}}}
+#     Every dep_type_key in type_values must appear in dependencies or
+#     optional_dependencies. `deferred` defaults to true (patch-only). Set it
+#     to false only when all possible types are ordered dependencies and the
+#     API requires the generic reference in the create payload.
+#   polymorphic_list_field_map: for writable lists whose entries each identify
+#     a potentially different dependency type. Shape:
+#       {field_name: {discriminator_field: object_type, object_id_field: object_id,
+#         type_values: {<discriminator_value>: <dep_type_key>}}}
+#     Unlike polymorphic_field_map these lists resolve inline: every entry is
+#     rewritten to the exact `{object_type, object_id}` API shape after its own
+#     dependency type and target id are resolved. Used by cable A/B terminations.
+#   min_netbox_version: optional minimum source NetBox version for a type,
+#     written as "major.minor" or "major.minor.patch". A selected type is
+#     skipped with a plan warning when the source is older.
+#   intentionally_unconverted_fields: nested API fields deliberately omitted
+#     from migration because they are read-only or their referenced object
+#     type/compound write shape is outside the registry. extract_fields drops
+#     these fields so raw nested JSON can never leak into a write payload.
+#   tenant_relation: same semantics and values as tenant-relations.yaml:
+#     a Django-style path to the Tenant model ("tenant", "device__tenant", ...),
+#     or null when there is no path (global catalog objects, or objects whose
+#     tenancy can only be reached through a GenericForeignKey).
+#   tenant_filterable: true if this type's own NetBox API list endpoint
+#     accepts a `tenant` (or equivalent) filter directly, so the tenant filter
+#     can be pushed down as a query parameter rather than filtered client-side
+#     after fetching everything.
+#   match_strategies: an ordered list of natural-key strategies. EVERY
+#     strategy whose fields are all present (non-null) on the source object,
+#     and whose fk_fields already have a resolved target id, is evaluated —
+#     not just the first one — and their results are cross-checked: if they
+#     all point to the same target object (or only one produced a result),
+#     that's the match; if they point to DIFFERENT target objects, the match
+#     is reported as ambiguous for manual review rather than silently
+#     trusting the higher-priority strategy (this is exactly how "part
+#     number matches object A but model matches object B" is caught). The
+#     declared order still matters for which strategy's fields are cited as
+#     "the" match in the report when there's no disagreement. Each strategy:
+#       fields:    field names to compare (may include fields not in field_map
+#         when they're plain scalars, e.g. "slug", "vid", "prefix")
+#       fk_fields: subset of `fields` that are references to another
+#         migratable object — resolved via the id map built from earlier,
+#         already-processed phases (dependencies are always ordered first),
+#         never compared as a scalar value. Every fk_field must also appear
+#         as a key in this type's field_map (or deferred_field_map).
+#   self_parent_field: for the handful of types with a self-referential
+#     optional parent (region, site group, location), the JSON field name of
+#     that parent reference. Excluded from the type-level dependency graph
+#     (see registry.py `TypeSpec.all_dependencies`) since it doesn't affect
+#     inter-type ordering, only the order objects of that SAME type must be
+#     created in (parent before child) — handled by the planner via depth
+#     sorting, not by the type graph.
+#   out_of_scope: true for v1 excluded types, kept here (with a reason) so the
+#     registry remains the single place documenting scope, and so enabling
+#     them later is a registry change, not a rewrite.
+
+version: 1
+
+types:
+
+  # ── Reference / catalog objects ─────────────────────────────────────────
+
+  tenancy.tenantgroup:
+    endpoint: "tenancy.tenant_groups"
+    ui_path: "tenancy/tenant-groups"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    self_parent_field: "parent"
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  tenancy.tenant:
+    endpoint: "tenancy.tenants"
+    ui_path: "tenancy/tenants"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [tenancy.tenantgroup]
+    field_map:
+      group: tenancy.tenantgroup
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  dcim.region:
+    endpoint: "dcim.regions"
+    ui_path: "dcim/regions"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    self_parent_field: "parent"
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  dcim.sitegroup:
+    endpoint: "dcim.site_groups"
+    ui_path: "dcim/site-groups"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    self_parent_field: "parent"
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  dcim.site:
+    endpoint: "dcim.sites"
+    ui_path: "dcim/sites"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [dcim.region, dcim.sitegroup, tenancy.tenant]
+    field_map:
+      region: dcim.region
+      group: dcim.sitegroup
+      tenant: tenancy.tenant
+    intentionally_unconverted_fields: [owner, asns]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+      - fields: [name]
+        fk_fields: []
+
+  dcim.location:
+    endpoint: "dcim.locations"
+    ui_path: "dcim/locations"
+    selectable: true
+    dependencies: [dcim.site]
+    optional_dependencies: [tenancy.tenant]
+    field_map:
+      site: dcim.site
+      tenant: tenancy.tenant
+    self_parent_field: "parent"
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [site, slug]
+        fk_fields: [site]
+
+  dcim.rackrole:
+    endpoint: "dcim.rack_roles"
+    ui_path: "dcim/rack-roles"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  dcim.rack:
+    endpoint: "dcim.racks"
+    ui_path: "dcim/racks"
+    selectable: true
+    dependencies: [dcim.site]
+    optional_dependencies: [dcim.location, tenancy.tenant, dcim.rackrole]
+    field_map:
+      site: dcim.site
+      location: dcim.location
+      tenant: tenancy.tenant
+      role: dcim.rackrole
+    intentionally_unconverted_fields: [group, rack_type, owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [site, name]
+        fk_fields: [site]
+
+  dcim.powerpanel:
+    endpoint: "dcim.power_panels"
+    ui_path: "dcim/power-panels"
+    selectable: true
+    dependencies: [dcim.site]
+    optional_dependencies: [dcim.location]
+    field_map:
+      site: dcim.site
+      location: dcim.location
+    intentionally_unconverted_fields: [owner, powerfeed_count]
+    tenant_relation: "site__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [site, name]
+        fk_fields: [site]
+
+  dcim.powerfeed:
+    endpoint: "dcim.power_feeds"
+    ui_path: "dcim/power-feeds"
+    selectable: true
+    dependencies: [dcim.powerpanel]
+    optional_dependencies: [dcim.rack, tenancy.tenant]
+    field_map:
+      power_panel: dcim.powerpanel
+      rack: dcim.rack
+      tenant: tenancy.tenant
+    intentionally_unconverted_fields: [owner, cable, cable_end, link_peers, link_peers_type, connected_endpoints, connected_endpoints_type, connected_endpoints_reachable, _occupied]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [power_panel, name]
+        fk_fields: [power_panel]
+
+  dcim.manufacturer:
+    endpoint: "dcim.manufacturers"
+    ui_path: "dcim/manufacturers"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+      - fields: [name]
+        fk_fields: []
+
+  dcim.devicetype:
+    endpoint: "dcim.device_types"
+    ui_path: "dcim/device-types"
+    selectable: true
+    dependencies: [dcim.manufacturer]
+    optional_dependencies: [dcim.platform]
+    field_map:
+      manufacturer: dcim.manufacturer
+      default_platform: dcim.platform
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      # Preferred: part number is the more reliable vendor identifier.
+      - fields: [manufacturer, part_number]
+        fk_fields: [manufacturer]
+      - fields: [manufacturer, model]
+        fk_fields: [manufacturer]
+      - fields: [slug]
+        fk_fields: []
+
+  dcim.moduletype:
+    endpoint: "dcim.module_types"
+    ui_path: "dcim/module-types"
+    selectable: true
+    dependencies: [dcim.manufacturer]
+    optional_dependencies: []
+    field_map:
+      manufacturer: dcim.manufacturer
+    intentionally_unconverted_fields: [profile, module_bay_types, owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [manufacturer, part_number]
+        fk_fields: [manufacturer]
+      - fields: [manufacturer, model]
+        fk_fields: [manufacturer]
+
+  extras.configtemplate:
+    endpoint: "extras.config_templates"
+    ui_path: "extras/config-templates"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    intentionally_unconverted_fields: [data_source, data_file, owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [name]
+        fk_fields: []
+
+  dcim.platform:
+    endpoint: "dcim.platforms"
+    ui_path: "dcim/platforms"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [dcim.manufacturer, extras.configtemplate]
+    field_map:
+      manufacturer: dcim.manufacturer
+      config_template: extras.configtemplate
+    self_parent_field: "parent"
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  dcim.devicerole:
+    endpoint: "dcim.device_roles"
+    ui_path: "dcim/device-roles"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [extras.configtemplate]
+    field_map:
+      config_template: extras.configtemplate
+    self_parent_field: "parent"
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  virtualization.clustertype:
+    endpoint: "virtualization.cluster_types"
+    ui_path: "virtualization/cluster-types"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  virtualization.clustergroup:
+    endpoint: "virtualization.cluster_groups"
+    ui_path: "virtualization/cluster-groups"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  virtualization.cluster:
+    endpoint: "virtualization.clusters"
+    ui_path: "virtualization/clusters"
+    selectable: true
+    dependencies: [virtualization.clustertype]
+    optional_dependencies: [virtualization.clustergroup, dcim.site, tenancy.tenant]
+    field_map:
+      type: virtualization.clustertype
+      group: virtualization.clustergroup
+      site: dcim.site
+      tenant: tenancy.tenant
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [name, type]
+        fk_fields: [type]
+
+  ipam.rir:
+    endpoint: "ipam.rirs"
+    ui_path: "ipam/rirs"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  ipam.role:
+    endpoint: "ipam.roles"
+    ui_path: "ipam/roles"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  ipam.vrf:
+    endpoint: "ipam.vrfs"
+    ui_path: "ipam/vrfs"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [tenancy.tenant]
+    field_map:
+      tenant: tenancy.tenant
+    intentionally_unconverted_fields: [owner, import_targets, export_targets]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [name, tenant]
+        fk_fields: [tenant]
+
+  ipam.vlangroup:
+    endpoint: "ipam.vlan_groups"
+    ui_path: "ipam/vlan-groups"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [tenancy.tenant]
+    field_map:
+      tenant: tenancy.tenant
+    intentionally_unconverted_fields: [vid_ranges, owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  circuits.provider:
+    endpoint: "circuits.providers"
+    ui_path: "circuits/providers"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    intentionally_unconverted_fields: [owner, accounts, asns, circuit_count]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  circuits.providernetwork:
+    endpoint: "circuits.provider_networks"
+    ui_path: "circuits/provider-networks"
+    selectable: true
+    dependencies: [circuits.provider]
+    optional_dependencies: []
+    field_map:
+      provider: circuits.provider
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [provider, name]
+        fk_fields: [provider]
+
+  circuits.circuittype:
+    endpoint: "circuits.circuit_types"
+    ui_path: "circuits/circuit-types"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    intentionally_unconverted_fields: [owner, circuit_count]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  circuits.circuit:
+    endpoint: "circuits.circuits"
+    ui_path: "circuits/circuits"
+    selectable: true
+    dependencies: [circuits.provider, circuits.circuittype]
+    optional_dependencies: [tenancy.tenant]
+    field_map:
+      provider: circuits.provider
+      type: circuits.circuittype
+      tenant: tenancy.tenant
+    intentionally_unconverted_fields: [provider_account, termination_a, termination_z, assignments, owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [provider, cid]
+        fk_fields: [provider]
+
+  circuits.circuittermination:
+    endpoint: "circuits.circuit_terminations"
+    ui_path: "circuits/circuit-terminations"
+    selectable: true
+    dependencies: [circuits.circuit]
+    optional_dependencies: [dcim.region, dcim.sitegroup, dcim.site, dcim.location, circuits.providernetwork]
+    field_map:
+      circuit: circuits.circuit
+    polymorphic_field_map:
+      termination_id:
+        discriminator_field: termination_type
+        deferred: false
+        type_values:
+          "dcim.region": dcim.region
+          "dcim.sitegroup": dcim.sitegroup
+          "dcim.site": dcim.site
+          "dcim.location": dcim.location
+          "circuits.providernetwork": circuits.providernetwork
+    intentionally_unconverted_fields: [termination, cable, cable_end, link_peers, link_peers_type, _occupied]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [circuit, term_side]
+        fk_fields: [circuit]
+
+  # ── Primary: DCIM ─────────────────────────────────────────────────────
+
+  dcim.device:
+    endpoint: "dcim.devices"
+    ui_path: "dcim/devices"
+    selectable: true
+    dependencies: [dcim.site, dcim.devicetype, dcim.devicerole]
+    optional_dependencies: [tenancy.tenant, dcim.platform, dcim.location, dcim.rack, extras.configtemplate, virtualization.cluster, dcim.virtualchassis]
+    field_map:
+      site: dcim.site
+      device_type: dcim.devicetype
+      role: dcim.devicerole
+      tenant: tenancy.tenant
+      platform: dcim.platform
+      location: dcim.location
+      rack: dcim.rack
+      config_template: extras.configtemplate
+      cluster: virtualization.cluster
+      virtual_chassis: dcim.virtualchassis
+    # primary_ip4/primary_ip6 point at an IP address, which may in turn be
+    # assigned to an interface belonging back to this very device — a
+    # type-level cycle if modeled as a normal dependency. Always resolved
+    # via the phase-`patch` second pass instead.
+    deferred_field_map:
+      primary_ip4: ipam.ipaddress
+      primary_ip6: ipam.ipaddress
+      oob_ip: ipam.ipaddress
+    intentionally_unconverted_fields: [parent_device, primary_ip, owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [name, site]
+        fk_fields: [site]
+
+  dcim.virtualdevicecontext:
+    endpoint: "dcim.virtual_device_contexts"
+    ui_path: "dcim/virtual-device-contexts"
+    selectable: true
+    dependencies: [dcim.device]
+    optional_dependencies: [tenancy.tenant]
+    field_map:
+      device: dcim.device
+      tenant: tenancy.tenant
+    # A VDC primary IP must be assigned to one of its device's interfaces.
+    # Interfaces are created after VDCs so their writable `vdcs` list can be
+    # resolved inline; defer the reverse VDC -> IP relationship to avoid a
+    # device/VDC/interface/IP dependency cycle.
+    deferred_field_map:
+      primary_ip4: ipam.ipaddress
+      primary_ip6: ipam.ipaddress
+    intentionally_unconverted_fields: [primary_ip, owner]
+    tenant_relation: "tenant"
+    # Scope VDCs through their required parent device. A VDC's own optional
+    # tenant may be blank or differ from the device tenant, so pushing a
+    # direct tenant filter would incorrectly omit VDCs on in-scope devices.
+    tenant_filterable: false
+    match_strategies:
+      - fields: [device, name]
+        fk_fields: [device]
+      - fields: [device, identifier]
+        fk_fields: [device]
+
+  dcim.virtualchassis:
+    endpoint: "dcim.virtual_chassis"
+    ui_path: "dcim/virtual-chassis"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    # A virtual chassis' master is one of its own member devices — always a
+    # patch, never resolvable at create time (the VC must exist before any
+    # member device can reference it, but the master can't be set until at
+    # least one member device has itself been created).
+    deferred_field_map:
+      master: dcim.device
+    intentionally_unconverted_fields: [owner, members]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [name]
+        fk_fields: []
+
+  dcim.modulebay:
+    endpoint: "dcim.module_bays"
+    ui_path: "dcim/module-bays"
+    selectable: true
+    dependencies: [dcim.device]
+    optional_dependencies: []
+    field_map:
+      device: dcim.device
+    deferred_field_map:
+      module: dcim.module
+      installed_module: dcim.module
+    intentionally_unconverted_fields: [module_bay_types, owner]
+    tenant_relation: "device__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [device, name]
+        fk_fields: [device]
+
+  dcim.module:
+    endpoint: "dcim.modules"
+    ui_path: "dcim/modules"
+    selectable: true
+    dependencies: [dcim.device, dcim.moduletype, dcim.modulebay]
+    optional_dependencies: []
+    field_map:
+      device: dcim.device
+      module_type: dcim.moduletype
+      module_bay: dcim.modulebay
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: "device__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [device, module_bay]
+        fk_fields: [device, module_bay]
+
+  dcim.interface:
+    endpoint: "dcim.interfaces"
+    ui_path: "dcim/interfaces"
+    selectable: true
+    dependencies: [dcim.device]
+    optional_dependencies: [dcim.module, dcim.virtualdevicecontext, ipam.vlan, ipam.vlantranslationpolicy, ipam.vrf]
+    field_map:
+      device: dcim.device
+      module: dcim.module
+      vdcs: dcim.virtualdevicecontext
+      untagged_vlan: ipam.vlan
+      tagged_vlans: ipam.vlan
+      qinq_svlan: ipam.vlan
+      vlan_translation_policy: ipam.vlantranslationpolicy
+      vrf: ipam.vrf
+    # lag/bridge/parent are self-referential (one interface pointing at another, usually but
+    # not always on the same device). Unlike region/site-group/location's self_parent_field,
+    # these don't form a single clean depth-sortable hierarchy within one type — an interface
+    # can be a LAG member, a bridge member, AND a sub-interface's parent simultaneously, with
+    # no guaranteed single ordering across a device's whole interface set. Deferred (patch
+    # phase) instead: by the time patches run, every interface from phase `primary` already
+    # exists for real, so these always resolve then regardless of creation order within the
+    # type.
+    deferred_field_map:
+      lag: dcim.interface
+      bridge: dcim.interface
+      parent: dcim.interface
+      primary_mac_address: dcim.macaddress
+    intentionally_unconverted_fields: [bridge_interfaces, mac_addresses, cable, wireless_link, wireless_lans, l2vpn_termination, owner]
+    tenant_relation: "device__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [device, name]
+        fk_fields: [device]
+
+  dcim.consoleport:
+    endpoint: "dcim.console_ports"
+    ui_path: "dcim/console-ports"
+    selectable: true
+    dependencies: [dcim.device]
+    optional_dependencies: [dcim.module]
+    field_map:
+      device: dcim.device
+      module: dcim.module
+    intentionally_unconverted_fields: [cable, owner]
+    tenant_relation: "device__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [device, name]
+        fk_fields: [device]
+
+  dcim.consoleserverport:
+    endpoint: "dcim.console_server_ports"
+    ui_path: "dcim/console-server-ports"
+    selectable: true
+    dependencies: [dcim.device]
+    optional_dependencies: [dcim.module]
+    field_map:
+      device: dcim.device
+      module: dcim.module
+    intentionally_unconverted_fields: [cable, owner]
+    tenant_relation: "device__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [device, name]
+        fk_fields: [device]
+
+  dcim.powerport:
+    endpoint: "dcim.power_ports"
+    ui_path: "dcim/power-ports"
+    selectable: true
+    dependencies: [dcim.device]
+    optional_dependencies: [dcim.module]
+    field_map:
+      device: dcim.device
+      module: dcim.module
+    intentionally_unconverted_fields: [cable, owner]
+    tenant_relation: "device__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [device, name]
+        fk_fields: [device]
+
+  dcim.poweroutlet:
+    endpoint: "dcim.power_outlets"
+    ui_path: "dcim/power-outlets"
+    selectable: true
+    dependencies: [dcim.device]
+    optional_dependencies: [dcim.module, dcim.powerport]
+    field_map:
+      device: dcim.device
+      module: dcim.module
+      power_port: dcim.powerport
+    intentionally_unconverted_fields: [cable, owner]
+    tenant_relation: "device__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [device, name]
+        fk_fields: [device]
+
+  dcim.frontport:
+    endpoint: "dcim.front_ports"
+    ui_path: "dcim/front-ports"
+    selectable: true
+    dependencies: [dcim.device]
+    optional_dependencies: [dcim.module]
+    field_map:
+      device: dcim.device
+      module: dcim.module
+    intentionally_unconverted_fields: [rear_ports, cable, owner]
+    tenant_relation: "device__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [device, name]
+        fk_fields: [device]
+
+  dcim.rearport:
+    endpoint: "dcim.rear_ports"
+    ui_path: "dcim/rear-ports"
+    selectable: true
+    dependencies: [dcim.device]
+    optional_dependencies: [dcim.module]
+    field_map:
+      device: dcim.device
+      module: dcim.module
+    intentionally_unconverted_fields: [front_ports, cable, owner]
+    tenant_relation: "device__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [device, name]
+        fk_fields: [device]
+
+  dcim.devicebay:
+    endpoint: "dcim.device_bays"
+    ui_path: "dcim/device-bays"
+    selectable: true
+    dependencies: [dcim.device]
+    optional_dependencies: []
+    field_map:
+      device: dcim.device
+    # installed_device is circular in the same way dcim.device.primary_ip4 is: a device bay's
+    # installed_device is itself a dcim.device, and that device's own bay (if any) could point
+    # back the other way. Always deferred to the patch phase, never resolved inline.
+    deferred_field_map:
+      installed_device: dcim.device
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: "device__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [device, name]
+        fk_fields: [device]
+
+  dcim.inventoryitem:
+    endpoint: "dcim.inventory_items"
+    ui_path: "dcim/inventory-items"
+    selectable: true
+    dependencies: [dcim.device]
+    optional_dependencies: [dcim.manufacturer]
+    field_map:
+      device: dcim.device
+      manufacturer: dcim.manufacturer
+    intentionally_unconverted_fields: [role, owner]
+    tenant_relation: "device__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [device, name]
+        fk_fields: [device]
+
+  # ── Primary: Virtualization ──────────────────────────────────────────
+
+  virtualization.virtualmachine:
+    endpoint: "virtualization.virtual_machines"
+    ui_path: "virtualization/virtual-machines"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [virtualization.cluster, dcim.site, dcim.device, dcim.devicerole, dcim.platform, tenancy.tenant, extras.configtemplate]
+    field_map:
+      cluster: virtualization.cluster
+      site: dcim.site
+      device: dcim.device
+      role: dcim.devicerole
+      platform: dcim.platform
+      tenant: tenancy.tenant
+      config_template: extras.configtemplate
+    deferred_field_map:
+      primary_ip4: ipam.ipaddress
+      primary_ip6: ipam.ipaddress
+    intentionally_unconverted_fields: [virtual_machine_type, primary_ip, owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [name, cluster]
+        fk_fields: [cluster]
+      - fields: [name, site]
+        fk_fields: [site]
+
+  virtualization.vminterface:
+    endpoint: "virtualization.interfaces"
+    ui_path: "virtualization/interfaces"
+    selectable: true
+    dependencies: [virtualization.virtualmachine]
+    optional_dependencies: [ipam.vlantranslationpolicy, ipam.vlan, ipam.vrf]
+    field_map:
+      virtual_machine: virtualization.virtualmachine
+      vlan_translation_policy: ipam.vlantranslationpolicy
+      untagged_vlan: ipam.vlan
+      tagged_vlans: ipam.vlan
+      qinq_svlan: ipam.vlan
+      vrf: ipam.vrf
+    deferred_field_map:
+      primary_mac_address: dcim.macaddress
+      parent: virtualization.vminterface
+      bridge: virtualization.vminterface
+    intentionally_unconverted_fields: [mac_addresses, l2vpn_termination, owner]
+    tenant_relation: "virtual_machine__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [virtual_machine, name]
+        fk_fields: [virtual_machine]
+
+  virtualization.virtualdisk:
+    endpoint: "virtualization.virtual_disks"
+    ui_path: "virtualization/virtual-disks"
+    selectable: true
+    dependencies: [virtualization.virtualmachine]
+    optional_dependencies: []
+    field_map:
+      virtual_machine: virtualization.virtualmachine
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: "virtual_machine__tenant"
+    tenant_filterable: false
+    match_strategies:
+      - fields: [virtual_machine, name]
+        fk_fields: [virtual_machine]
+
+  # ── Primary: IPAM ────────────────────────────────────────────────────
+
+  ipam.aggregate:
+    endpoint: "ipam.aggregates"
+    ui_path: "ipam/aggregates"
+    selectable: true
+    dependencies: [ipam.rir]
+    optional_dependencies: [tenancy.tenant]
+    field_map:
+      rir: ipam.rir
+      tenant: tenancy.tenant
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [prefix]
+        fk_fields: []
+
+  ipam.prefix:
+    endpoint: "ipam.prefixes"
+    ui_path: "ipam/prefixes"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [ipam.vrf, dcim.region, dcim.sitegroup, dcim.site, dcim.location, tenancy.tenant, ipam.role, ipam.vlangroup, ipam.vlan]
+    field_map:
+      vrf: ipam.vrf
+      site: dcim.site
+      tenant: tenancy.tenant
+      role: ipam.role
+      vlan_group: ipam.vlangroup
+      vlan: ipam.vlan
+    # NetBox 4.6 replaced the older site-only prefix scope with a GenericForeignKey.
+    # It is optional, but when present must be translated from the source id before
+    # the prefix is created; sending scope_id unchanged can point at no target object.
+    polymorphic_field_map:
+      scope_id:
+        discriminator_field: scope_type
+        deferred: false
+        type_values:
+          "dcim.region": dcim.region
+          "dcim.sitegroup": dcim.sitegroup
+          "dcim.site": dcim.site
+          "dcim.location": dcim.location
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [prefix, vrf]
+        fk_fields: [vrf]
+
+  ipam.iprange:
+    endpoint: "ipam.ip_ranges"
+    ui_path: "ipam/ip-ranges"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [ipam.vrf, tenancy.tenant, ipam.role]
+    field_map:
+      vrf: ipam.vrf
+      tenant: tenancy.tenant
+      role: ipam.role
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [start_address, end_address, vrf]
+        fk_fields: [vrf]
+
+  ipam.ipaddress:
+    endpoint: "ipam.ip_addresses"
+    ui_path: "ipam/ip-addresses"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [ipam.vrf, tenancy.tenant, dcim.interface, virtualization.vminterface]
+    field_map:
+      vrf: ipam.vrf
+      tenant: tenancy.tenant
+    # `assigned_object` is a GenericForeignKey: its actual type is given by the sibling
+    # `assigned_object_type` field (e.g. "dcim.interface" or "virtualization.vminterface").
+    # Handled via polymorphic_field_map so each IP address is resolved against whichever
+    # dependency type its own assigned_object_type names. Always deferred (patch-only) —
+    # no ordering guarantee relative to interfaces or VM interfaces.
+    polymorphic_field_map:
+      assigned_object_id:
+        discriminator_field: assigned_object_type
+        type_values:
+          "dcim.interface": dcim.interface
+          "virtualization.vminterface": virtualization.vminterface
+    deferred_field_map:
+      nat_inside: ipam.ipaddress
+    intentionally_unconverted_fields: [nat_outside, owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [address, vrf]
+        fk_fields: [vrf]
+
+  ipam.vlan:
+    endpoint: "ipam.vlans"
+    ui_path: "ipam/vlans"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [ipam.vlangroup, dcim.site, tenancy.tenant, ipam.role]
+    field_map:
+      group: ipam.vlangroup
+      site: dcim.site
+      tenant: tenancy.tenant
+      role: ipam.role
+    deferred_field_map:
+      qinq_svlan: ipam.vlan
+    intentionally_unconverted_fields: [owner, l2vpn_termination]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [vid, group]
+        fk_fields: [group]
+      - fields: [vid, site]
+        fk_fields: [site]
+
+  ipam.asn:
+    endpoint: "ipam.asns"
+    ui_path: "ipam/asns"
+    selectable: true
+    dependencies: [ipam.rir]
+    optional_dependencies: [tenancy.tenant, ipam.role, dcim.site]
+    field_map:
+      rir: ipam.rir
+      tenant: tenancy.tenant
+      role: ipam.role
+      sites: dcim.site
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [asn, rir]
+        fk_fields: [rir]
+
+  ipam.fhrpgroup:
+    endpoint: "ipam.fhrp_groups"
+    ui_path: "ipam/fhrp-groups"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    intentionally_unconverted_fields: [owner, ip_addresses]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [group_id, protocol]
+        fk_fields: []
+
+  ipam.fhrpgroupassignment:
+    endpoint: "ipam.fhrp_group_assignments"
+    ui_path: "ipam/fhrp-group-assignments"
+    selectable: true
+    dependencies: [ipam.fhrpgroup]
+    optional_dependencies: [dcim.interface, virtualization.vminterface]
+    field_map:
+      group: ipam.fhrpgroup
+    polymorphic_field_map:
+      interface_id:
+        discriminator_field: interface_type
+        type_values:
+          "dcim.interface": dcim.interface
+          "virtualization.vminterface": virtualization.vminterface
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [group, interface_type, interface_id]
+        fk_fields: [group, interface_id]
+
+  ipam.service:
+    endpoint: "ipam.services"
+    ui_path: "ipam/services"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [dcim.device, virtualization.virtualmachine, ipam.fhrpgroup, ipam.ipaddress]
+    field_map:
+      ipaddresses: ipam.ipaddress
+    intentionally_unconverted_fields: [owner]
+    polymorphic_field_map:
+      parent_object_id:
+        discriminator_field: parent_object_type
+        type_values:
+          "dcim.device": dcim.device
+          "virtualization.virtualmachine": virtualization.virtualmachine
+          "ipam.fhrpgroup": ipam.fhrpgroup
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [parent_object_type, parent_object_id, name, protocol, ports]
+        fk_fields: [parent_object_id]
+
+  dcim.macaddress:
+    endpoint: "dcim.mac_addresses"
+    ui_path: "dcim/mac-addresses"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [dcim.interface, virtualization.vminterface]
+    field_map: {}
+    intentionally_unconverted_fields: [owner]
+    polymorphic_field_map:
+      assigned_object_id:
+        discriminator_field: assigned_object_type
+        type_values:
+          "dcim.interface": dcim.interface
+          "virtualization.vminterface": virtualization.vminterface
+    min_netbox_version: "4.2"
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [mac_address]
+        fk_fields: []
+
+  ipam.vlantranslationpolicy:
+    endpoint: "ipam.vlan_translation_policies"
+    ui_path: "ipam/vlan-translation-policies"
+    selectable: true
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    intentionally_unconverted_fields: [rules, owner]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [name]
+        fk_fields: []
+
+  ipam.vlantranslationrule:
+    endpoint: "ipam.vlan_translation_rules"
+    ui_path: "ipam/vlan-translation-rules"
+    selectable: true
+    dependencies: [ipam.vlantranslationpolicy]
+    optional_dependencies: []
+    field_map:
+      policy: ipam.vlantranslationpolicy
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [policy, local_vid]
+        fk_fields: [policy]
+
+  ipam.asnrange:
+    endpoint: "ipam.asn_ranges"
+    ui_path: "ipam/asn-ranges"
+    selectable: true
+    dependencies: [ipam.rir]
+    optional_dependencies: [tenancy.tenant]
+    field_map:
+      rir: ipam.rir
+      tenant: tenancy.tenant
+    intentionally_unconverted_fields: [owner]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  # NetBox moved L2VPN models from IPAM to the VPN app; 4.6.8 exposes these
+  # endpoints under /api/vpn/ and accepts assigned_object_type/id on writes.
+  vpn.l2vpn:
+    endpoint: "vpn.l2vpns"
+    ui_path: "vpn/l2vpns"
+    selectable: true
+    dependencies: []
+    optional_dependencies: [tenancy.tenant]
+    field_map:
+      tenant: tenancy.tenant
+    intentionally_unconverted_fields: [owner, import_targets, export_targets]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+      - fields: [name]
+        fk_fields: []
+
+  vpn.l2vpntermination:
+    endpoint: "vpn.l2vpn_terminations"
+    ui_path: "vpn/l2vpn-terminations"
+    selectable: true
+    dependencies: [vpn.l2vpn]
+    optional_dependencies: [dcim.interface, virtualization.vminterface, ipam.vlan]
+    field_map:
+      l2vpn: vpn.l2vpn
+    polymorphic_field_map:
+      assigned_object_id:
+        discriminator_field: assigned_object_type
+        deferred: false
+        type_values:
+          "dcim.interface": dcim.interface
+          "virtualization.vminterface": virtualization.vminterface
+          "ipam.vlan": ipam.vlan
+    intentionally_unconverted_fields: [assigned_object]
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [l2vpn, assigned_object_type, assigned_object_id]
+        fk_fields: [l2vpn, assigned_object_id]
+
+  dcim.cable:
+    endpoint: "dcim.cables"
+    ui_path: "dcim/cables"
+    selectable: true
+    # A cable has no intrinsic reliable unique key: label may be blank. Its
+    # identity is the unordered pair of endpoint sets, resolved only after all
+    # possible termination types have target ids. LiveTargetLookup canonicalizes
+    # side order and termination order before comparing these two fields.
+    dependencies: [dcim.interface, dcim.consoleport, dcim.consoleserverport, dcim.powerport, dcim.poweroutlet, dcim.frontport, dcim.rearport, circuits.circuittermination, dcim.powerfeed]
+    optional_dependencies: [tenancy.tenant]
+    field_map:
+      tenant: tenancy.tenant
+    polymorphic_list_field_map:
+      a_terminations: &cable_terminations
+        discriminator_field: object_type
+        object_id_field: object_id
+        type_values:
+          "dcim.interface": dcim.interface
+          "dcim.consoleport": dcim.consoleport
+          "dcim.consoleserverport": dcim.consoleserverport
+          "dcim.powerport": dcim.powerport
+          "dcim.poweroutlet": dcim.poweroutlet
+          "dcim.frontport": dcim.frontport
+          "dcim.rearport": dcim.rearport
+          "circuits.circuittermination": circuits.circuittermination
+          "dcim.powerfeed": dcim.powerfeed
+      b_terminations: *cable_terminations
+    intentionally_unconverted_fields: [owner, bundle]
+    tenant_relation: "tenant"
+    tenant_filterable: true
+    match_strategies:
+      - fields: [a_terminations, b_terminations]
+        fk_fields: [a_terminations, b_terminations]
+
+  # Not part of any type's `dependencies`/`optional_dependencies` and deliberately absent
+  # from field_map everywhere — `tags` is handled as an implicit, universal field on every
+  # type instead (see registry.py's UNIVERSAL_TAG_FIELD/UNIVERSAL_TAG_TYPE and
+  # TypeSpec.all_field_map). build_plan() always processes this type first, regardless of
+  # what the user selected, exactly like it would need to if it were a real dependency of
+  # everything — which, in effect, it is.
+  extras.tag:
+    endpoint: "extras.tags"
+    ui_path: "extras/tags"
+    selectable: false
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    tenant_relation: null
+    tenant_filterable: false
+    match_strategies:
+      - fields: [slug]
+        fk_fields: []
+
+  extras.customfield:
+    endpoint: "extras.custom_fields"
+    ui_path: "extras/custom-fields"
+    selectable: false
+    dependencies: []
+    optional_dependencies: []
+    field_map: {}
+    tenant_relation: null
+    tenant_filterable: false
+    out_of_scope: true
+    out_of_scope_reason: "Custom field definitions and values are out of scope for v1; values are stripped from migrated payloads and reported as a warning."
+    match_strategies: []

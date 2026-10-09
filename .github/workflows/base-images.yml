@@ -1,0 +1,42 @@
+name: Update Chainguard base images
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-chainguard-base-images
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Resolve current Chainguard image digests
+        run: scripts/update-baseimage-lock.sh
+
+      - name: Open or update base-image pull request
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: maintenance/chainguard-base-images
+          delete-branch: true
+          commit-message: "chore: update Chainguard base image digests"
+          title: "chore: update Chainguard base images"
+          body: |
+            Automated refresh of the pinned Chainguard base-image digests.
+
+            The Dockerfile and `baseimage.lock` are updated together. CI builds and scans the
+            resulting container before this pull request is merged.

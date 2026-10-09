@@ -1,0 +1,5 @@
+# Pinned Chainguard image references used by Dockerfile.
+# Update with scripts/update-baseimage-lock.sh; do not edit digests independently.
+GO_DEV=cgr.dev/chainguard/go:latest-dev@sha256:028406b3871c3eb4825a9815cb0d75e608283cc29986eb20901d5981758f0127
+PYTHON_DEV=cgr.dev/chainguard/python:latest-dev@sha256:7e19f3a10fe87a502e9e1bc39e3fb917281cd72dabec34d70bacbe2d7d6dd63b
+PYTHON_RUNTIME=cgr.dev/chainguard/python:latest@sha256:e23e5598a0770ec4a9bbc5dbd9f157f097b4825c4508914e36acd33454484535

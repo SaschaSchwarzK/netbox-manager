@@ -1,0 +1,45 @@
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+:8443 {
+	tls /app/certs/cert.pem /app/certs/key.pem
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		X-Frame-Options "DENY"
+	}
+
+	@api path /api/*
+	handle @api {
+		request_body {
+			max_size 15MB
+		}
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	@docs path /docs* /redoc* /openapi.json
+	handle @docs {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	@assets path /assets/*
+	handle @assets {
+		root * /app/frontend
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	handle {
+		root * /app/frontend
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}

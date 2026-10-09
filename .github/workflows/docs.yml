@@ -1,0 +1,119 @@
+name: Docs
+
+# After a merge to develop that touches the docs (or the Docusaurus site config),
+# build the HTML site and open a pull request that updates the GitHub Pages branch.
+# Merging that pull request publishes the new documentation.
+on:
+  push:
+    branches: [develop]
+    paths:
+      - 'docs/**'
+      - 'docs/website/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write        # push the docs/site-update branch
+  pull-requests: write   # open / update the pull request
+
+# A newer merge supersedes a run that is still building.
+concurrency:
+  group: docs-site-pr
+  cancel-in-progress: true
+
+env:
+  PAGES_BRANCH: gh-pages          # branch GitHub Pages serves from (root folder)
+  PR_BRANCH: docs/site-update     # fixed name, so one open PR is updated instead of many being created
+
+jobs:
+  build-docs-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out develop
+        uses: actions/checkout@v7
+
+      - name: Ensure the Pages branch exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git ls-remote --exit-code --heads origin "$PAGES_BRANCH" >/dev/null 2>&1; then
+            echo "Branch $PAGES_BRANCH already exists."
+            exit 0
+          fi
+          echo "Creating empty orphan branch $PAGES_BRANCH."
+          tmp="$(mktemp -d)"
+          git -C "$tmp" init -q
+          git -C "$tmp" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$tmp" checkout -q --orphan "$PAGES_BRANCH"
+          git -C "$tmp" -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q --allow-empty -m "Initialize GitHub Pages branch"
+          git -C "$tmp" push -q origin "$PAGES_BRANCH"
+
+      - name: Work out the site URL
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          repo="${GITHUB_REPOSITORY#*/}"
+          if [ "${repo,,}" = "${owner}.github.io" ]; then base="/"; else base="/${repo}/"; fi
+          {
+            echo "DOCS_URL=https://${owner}.github.io"
+            echo "DOCS_BASE_URL=${base}"
+            echo "DOCS_REPO_URL=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+            echo "DOCS_SOURCE_BRANCH=develop"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/website/package-lock.json
+
+      - name: Install Docusaurus
+        working-directory: docs/website
+        run: npm ci --no-audit --no-fund
+
+      - name: Build the HTML site
+        working-directory: docs/website
+        run: npm run build
+
+      - name: Check out the Pages branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.PAGES_BRANCH }}
+          path: pages
+
+      - name: Replace the Pages content with the new build
+        run: |
+          # Remove everything except git data and a custom-domain CNAME, then copy the fresh build in.
+          # (Removing first also deletes pages that no longer exist.)
+          find pages -mindepth 1 -maxdepth 1 ! -name '.git' ! -name 'CNAME' -exec rm -rf {} +
+          cp -a docs/website/build/. pages/
+          touch pages/.nojekyll
+
+      - name: Open or update the docs pull request
+        id: cpr
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: pages
+          base: ${{ env.PAGES_BRANCH }}
+          branch: ${{ env.PR_BRANCH }}
+          delete-branch: true
+          commit-message: "docs: rebuild site from ${{ github.sha }}"
+          title: "docs: update published documentation"
+          body: |
+            Automated rebuild of the documentation site with Docusaurus.
+
+            - Source commit on `develop`: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+            - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Merging this pull request publishes the site at ${{ env.DOCS_URL }}${{ env.DOCS_BASE_URL }}
+
+      - name: Summary
+        run: |
+          if [ -n "${{ steps.cpr.outputs.pull-request-number }}" ]; then
+            echo "Pull request #${{ steps.cpr.outputs.pull-request-number }} (${{ steps.cpr.outputs.pull-request-operation }}): ${{ steps.cpr.outputs.pull-request-url }}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The built site is identical to the published one; no pull request needed." >> "$GITHUB_STEP_SUMMARY"
+          fi

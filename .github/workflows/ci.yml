@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # dorny/paths-filter uses the pull-request files API for pull_request events.
+  pull-requests: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.lock
+            backend/requirements-dev.txt
+      - run: |
+          python -m pip install --require-hashes -r backend/requirements.lock
+          python -m pip install -r backend/requirements-dev.txt
+      - name: Lint backend
+        run: ruff check backend
+      - name: Test backend
+        env:
+          AUTHENTICATION_DISABLED: "True"
+          PYTHONPATH: ${{ github.workspace }}/backend
+        run: |
+          sudo install -d -o "$(id -u)" -g "$(id -g)" /app/data
+          NBM_SECRET_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+          export NBM_SECRET_KEY
+          python -m pytest -q backend/tests
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: frontend
+        run: npm ci
+      - working-directory: frontend
+        run: npx tsc -b --noEmit
+      - working-directory: frontend
+        run: npm run build
+      - working-directory: frontend
+        run: npm test
+
+  docs-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: changes
+        with:
+          filters: |
+            docs:
+              - 'docs/**'
+              - 'docs/website/**'
+      - uses: actions/setup-node@v6
+        if: steps.changes.outputs.docs == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/website/package-lock.json
+      - name: Derive documentation build environment
+        if: steps.changes.outputs.docs == 'true'
+        run: |
+          owner=""
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          repo="${GITHUB_REPOSITORY#*/}"
+          if [ "${repo,,}" = "${owner}.github.io" ]; then base="/"; else base="/${repo}/"; fi
+          {
+            echo "DOCS_URL=https://${owner}.github.io"
+            echo "DOCS_BASE_URL=${base}"
+            echo "DOCS_REPO_URL=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+            echo "DOCS_SOURCE_BRANCH=${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          } >> "$GITHUB_ENV"
+      - name: Build documentation
+        if: steps.changes.outputs.docs == 'true'
+        working-directory: docs/website
+        run: npm ci && npm run build

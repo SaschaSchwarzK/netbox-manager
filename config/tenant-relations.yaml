@@ -1,0 +1,128 @@
+# Canonical registry: object_type -> path to Tenant model.
+# This file is the single source of truth for tenant_relation values used
+# in permission templates. validate_template() rejects any template whose
+# tenant_relation does not match the entry here for that object_type.
+#
+# path: null means there is no static, single-valued path to Tenant
+#   (usually because the parent is a GenericForeignKey, i.e. it can point
+#   to more than one model type depending on the row). These require
+#   tenant_relation: "unsupported" + accept_unscoped: true in templates,
+#   with a note justifying the unscoped grant.
+#
+# verified_against records the exact upstream tags inspected for this seed.
+#
+# Direct relations can be checked against a running NetBox installation with
+# scripts/check_tenant_relations.py. Indirect and unsupported paths still
+# require review because Django introspection cannot infer tenancy semantics.
+
+version: 1
+verified_against:
+  - "NetBox 4.6.8"
+  - "NetBox 4.7.0"
+
+relations:
+
+  # ── DCIM: direct tenant FK ──────────────────────────────────────────
+  dcim.site:
+    path: "tenant"
+  dcim.location:
+    path: "tenant"
+  dcim.rack:
+    path: "tenant"
+  dcim.device:
+    path: "tenant"
+  dcim.virtualdevicecontext:
+    path: "tenant"
+  dcim.virtualchassis:
+    path: null
+    reason: "VirtualChassis has no tenant field of its own; tenancy is per-member Device."
+  dcim.devicetype:
+    path: null
+    reason: "Global catalog object (manufacturer-level), not tenant-scoped by design."
+  dcim.manufacturer:
+    path: null
+    reason: "Global catalog object, not tenant-scoped by design."
+
+  # ── DCIM: indirect (inherit tenant via Device) ──────────────────────
+  dcim.interface:
+    path: "device__tenant"
+  dcim.consoleport:
+    path: "device__tenant"
+  dcim.consoleserverport:
+    path: "device__tenant"
+  dcim.powerport:
+    path: "device__tenant"
+  dcim.poweroutlet:
+    path: "device__tenant"
+  dcim.frontport:
+    path: "device__tenant"
+  dcim.rearport:
+    path: "device__tenant"
+  dcim.module:
+    path: "device__tenant"
+    reason: "Module has a direct device ForeignKey in both verified versions."
+  dcim.inventoryitem:
+    path: "device__tenant"
+
+  dcim.modulebay:
+    path: "device__tenant"
+    reason: "ModuleBay inherits ComponentModel.device in both verified versions."
+  dcim.cable:
+    path: "tenant"
+    reason: "Cable has a direct tenant ForeignKey in both verified versions."
+  dcim.powerpanel:
+    path: "site__tenant"
+    reason: "PowerPanel has a required site ForeignKey in both verified versions."
+  dcim.powerfeed:
+    path: "tenant"
+    reason: "PowerFeed has a direct optional tenant ForeignKey in NetBox 4.6.8."
+
+  # ── IPAM: direct tenant FK ───────────────────────────────────────────
+  ipam.prefix:
+    path: "tenant"
+  ipam.ipaddress:
+    path: "tenant"
+  ipam.iprange:
+    path: "tenant"
+  ipam.vlan:
+    path: "tenant"
+  ipam.vrf:
+    path: "tenant"
+  ipam.asn:
+    path: "tenant"
+  ipam.aggregate:
+    path: "tenant"
+  ipam.routetarget:
+    path: "tenant"
+
+  ipam.vlangroup:
+    path: "tenant"
+    reason: "VLANGroup has a direct tenant ForeignKey in both verified versions."
+  # ── IPAM: unsupported ────────────────────────────────────────────────
+  ipam.fhrpgroup:
+    path: null
+    reason: "No tenant field; associated indirectly via assigned interfaces (GenericForeignKey), not statically resolvable."
+
+  # ── Virtualization: direct / near-direct ─────────────────────────────
+  virtualization.cluster:
+    path: "tenant"
+  virtualization.virtualmachine:
+    path: "tenant"
+  virtualization.vminterface:
+    path: "virtual_machine__tenant"
+
+  # ── Circuits ──────────────────────────────────────────────────────────
+  circuits.circuit:
+    path: "tenant"
+
+  # ── VPN ───────────────────────────────────────────────────────────────
+  vpn.l2vpn:
+    path: "tenant"
+  vpn.l2vpntermination:
+    path: null
+    reason: "Tenancy is only indirect through a GenericForeignKey assignment target."
+
+  # ── Tenancy itself (excluded on purpose — see blocklist note) ────────
+  # tenancy.contact / tenancy.contactassignment intentionally omitted here;
+  # if needed, add explicitly with careful review — contact assignment
+  # tenancy semantics differ from object tenancy and are easy to get wrong.
