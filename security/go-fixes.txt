@@ -1,0 +1,8 @@
+# Go module overrides applied while building Caddy with xcaddy.
+#
+# Format:
+#   <module>[ @<old-version> ]=<new-version | module@version>
+#
+# When the right-hand side is only a version, the build converts it to
+# <module>@<version>. Blank lines and comments are ignored.
+

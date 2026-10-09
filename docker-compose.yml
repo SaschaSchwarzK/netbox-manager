@@ -1,0 +1,31 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    volumes:
+      - dbdata:/app/data
+      - certdata:/app/certs
+      # Data Export temporary and completed files stay on disk, not in the memory-backed /tmp.
+      - exportdata:/app/exports
+    ports:
+      - "8443:8443"
+    read_only: true
+    tmpfs:
+      # 48 MiB archive cap + 8 MiB headroom; tmpfs counts against mem_limit.
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 128
+volumes:
+  dbdata:
+  certdata:
+  exportdata:

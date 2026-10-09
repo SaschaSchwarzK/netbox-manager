@@ -1,0 +1,21 @@
+{
+  "name": "netbox-manager-docs",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "prepare-docs": "node scripts/prepare-docs.mjs",
+    "start": "npm run prepare-docs && docusaurus start",
+    "build": "npm run prepare-docs && docusaurus build",
+    "serve": "docusaurus serve",
+    "clear": "docusaurus clear"
+  },
+  "dependencies": {
+    "@docusaurus/core": "^3.10.2",
+    "@docusaurus/preset-classic": "^3.10.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "engines": {
+    "node": ">=20.0"
+  }
+}

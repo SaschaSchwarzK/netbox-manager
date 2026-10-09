@@ -1,0 +1,901 @@
+from datetime import datetime
+from typing import Any, Literal, Optional, Union
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.path_safety import validate_path_pattern, validate_repo_path
+
+
+# ---------- NetBox instances ----------
+
+class NetboxInstanceCreate(BaseModel):
+    name: str
+    base_url: str
+    api_token: str
+    verify_ssl: bool = True
+    description: Optional[str] = None
+    tags: list[str] = []
+    requires_approved_pr: bool = False
+    ca_bundle_pem: Optional[str] = None
+
+
+class NetboxInstanceUpdate(BaseModel):
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+    api_token: Optional[str] = None  # only sent when the user wants to rotate it
+    verify_ssl: Optional[bool] = None
+    description: Optional[str] = None
+    tags: Optional[list[str]] = None
+    requires_approved_pr: Optional[bool] = None
+    ca_bundle_pem: Optional[str] = None
+
+
+class InstanceTestRequest(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+    api_token: Optional[str] = None
+    verify_ssl: Optional[bool] = None
+    description: Optional[str] = None
+    tags: Optional[list[str]] = None
+    requires_approved_pr: Optional[bool] = None
+    ca_bundle_pem: Optional[str] = None
+
+
+class NetboxInstanceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    base_url: str
+    verify_ssl: bool
+    description: Optional[str] = None
+    tags: list[str] = []
+    requires_approved_pr: bool = False
+    has_ca_bundle: bool = False
+    created_at: datetime
+    updated_at: datetime
+    # api_token is intentionally never returned
+
+
+class ConnectionTestResult(BaseModel):
+    ok: bool
+    netbox_version: Optional[str] = None
+    detail: Optional[str] = None
+
+
+# ---------- GitHub targets ----------
+
+class GithubTargetCreate(BaseModel):
+    name: str
+    repo: str
+    branch: str = "main"
+    path_pattern: str = "device-types/{manufacturer}/{slug}.yml"
+    module_path_pattern: str = "module-types/{manufacturer}/{model}.yaml"
+    rack_path_pattern: str = "rack-types/{manufacturer}/{model}.yaml"
+    custom_fields_path: str = "custom-fields/template.yml"
+    reference_data_path: str = "reference-data"
+    pat: str
+
+    @field_validator("path_pattern")
+    @classmethod
+    def valid_device_path_pattern(cls, value: str) -> str:
+        return validate_path_pattern(value, {"manufacturer", "model", "slug"})
+
+    @field_validator("module_path_pattern")
+    @classmethod
+    def valid_module_path_pattern(cls, value: str) -> str:
+        return validate_path_pattern(value, {"manufacturer", "model", "slug"})
+
+    @field_validator("rack_path_pattern")
+    @classmethod
+    def valid_rack_path_pattern(cls, value: str) -> str:
+        return validate_path_pattern(value, {"manufacturer", "model", "slug"})
+
+    @field_validator("custom_fields_path")
+    @classmethod
+    def valid_custom_fields_path(cls, value: str) -> str:
+        return validate_repo_path(value, "custom-fields", (".yml", ".yaml"))
+
+    @field_validator("reference_data_path")
+    @classmethod
+    def valid_reference_data_path(cls, value: str) -> str:
+        if not value or ".." in value.split("/") or "\\" in value or value.startswith("/"):
+            raise ValueError("reference_data_path must be a safe relative directory")
+        return value.strip("/")
+
+
+class GithubTargetUpdate(BaseModel):
+    name: Optional[str] = None
+    repo: Optional[str] = None
+    branch: Optional[str] = None
+    path_pattern: Optional[str] = None
+    module_path_pattern: Optional[str] = None
+    rack_path_pattern: Optional[str] = None
+    custom_fields_path: Optional[str] = None
+    reference_data_path: Optional[str] = None
+    pat: Optional[str] = None
+
+    @field_validator("path_pattern")
+    @classmethod
+    def valid_device_path_pattern(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else validate_path_pattern(value, {"manufacturer", "model", "slug"})
+
+    @field_validator("module_path_pattern")
+    @classmethod
+    def valid_module_path_pattern(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else validate_path_pattern(value, {"manufacturer", "model", "slug"})
+
+    @field_validator("rack_path_pattern")
+    @classmethod
+    def valid_rack_path_pattern(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else validate_path_pattern(value, {"manufacturer", "model", "slug"})
+
+    @field_validator("custom_fields_path")
+    @classmethod
+    def valid_custom_fields_path(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else validate_repo_path(value, "custom-fields", (".yml", ".yaml"))
+
+    @field_validator("reference_data_path")
+    @classmethod
+    def valid_reference_data_path(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not value or ".." in value.split("/") or "\\" in value or value.startswith("/"):
+            raise ValueError("reference_data_path must be a safe relative directory")
+        return value.strip("/")
+
+
+class GithubTargetTestRequest(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    repo: Optional[str] = None
+    branch: Optional[str] = None
+    path_pattern: Optional[str] = None
+    module_path_pattern: Optional[str] = None
+    rack_path_pattern: Optional[str] = None
+    custom_fields_path: Optional[str] = None
+    reference_data_path: Optional[str] = None
+    pat: Optional[str] = None
+
+
+class GithubTargetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    repo: str
+    branch: str
+    path_pattern: str
+    module_path_pattern: str
+    rack_path_pattern: str
+    custom_fields_path: str
+    reference_data_path: str
+    created_at: datetime
+
+
+# ---------- Device types (stored as YAML files in a GitHub repo) ----------
+
+class OpenPrInfo(BaseModel):
+    number: int
+    url: str
+
+
+class DeviceTypeFileOut(BaseModel):
+    repo_target_id: Optional[str]
+    path: str
+    sha: str
+    payload: dict[str, Any]
+    open_pr: Optional[OpenPrInfo] = None
+    image_status: dict[str, str] = {}
+
+
+class DeviceTypeSummary(BaseModel):
+    path: str
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    slug: Optional[str] = None
+    part_number: Optional[str] = None
+
+
+class ModuleTypeSummary(BaseModel):
+    path: str
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    part_number: Optional[str] = None
+
+
+class ModuleTypeFileOut(BaseModel):
+    repo_target_id: str
+    path: str
+    sha: str
+    payload: dict[str, Any]
+    open_pr: Optional[OpenPrInfo] = None
+    image_status: dict[str, str] = {}
+
+
+class RackTypeSummary(BaseModel):
+    path: str
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    slug: Optional[str] = None
+    u_height: Optional[int] = None
+
+
+class RackTypeFileOut(BaseModel):
+    repo_target_id: str
+    path: str
+    sha: str
+    payload: dict[str, Any]
+    open_pr: Optional[OpenPrInfo] = None
+
+
+class CreateRackTypeRequest(BaseModel):
+    manufacturer: str
+    model: str
+    slug: str
+    payload: dict[str, Any] = {}
+    commit_message: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class CreateModuleTypeRequest(BaseModel):
+    manufacturer: str
+    model: str
+    payload: dict[str, Any] = {}
+    commit_message: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class CreateDeviceTypeRequest(BaseModel):
+    manufacturer: str
+    model: str
+    slug: str
+    payload: dict[str, Any] = {}
+    commit_message: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class SaveDeviceTypeRequest(BaseModel):
+    payload: dict[str, Any]
+    sha: Optional[str] = None
+    commit_message: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class ImportYamlRequest(BaseModel):
+    yaml_text: str
+    commit_message: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class DeleteDeviceTypeRequest(BaseModel):
+    sha: str
+    commit_message: Optional[str] = None
+
+
+class PushToNetboxRequest(BaseModel):
+    instance_ids: list[str] = []
+    tags: list[str] = []  # bulk-select: also push to every instance carrying any of these tags
+    overwrite: bool = False
+
+
+class PushResultItem(BaseModel):
+    target: str
+    status: str
+    detail: Optional[str] = None
+    warnings: list[str] = []
+
+
+# ---------- Diff / drift ----------
+
+class BaseFieldChange(BaseModel):
+    field: str
+    source: Any = None
+    netbox: Any = None
+
+
+class FieldLevelChange(BaseModel):
+    field: str
+    source: Any = None
+    existing: Any = None
+
+
+class ChangedItem(BaseModel):
+    name: str
+    field_changes: list[FieldLevelChange] = []
+
+
+class ComponentChange(BaseModel):
+    added: list[str] = []
+    removed: list[str] = []
+    changed: list[ChangedItem] = []
+
+
+class ImageChange(BaseModel):
+    side: str
+    status: str  # source_missing / target_missing / different
+    detail: Optional[str] = None
+
+
+class DiffResult(BaseModel):
+    status: str  # in_sync / drift / missing
+    base_field_changes: list[BaseFieldChange] = []
+    component_changes: dict[str, ComponentChange] = {}
+    image_changes: list[ImageChange] = []
+
+
+class InstanceDiffResult(BaseModel):
+    instance_id: str
+    instance_name: str
+    diff: Optional[DiffResult] = None
+    error: Optional[str] = None
+
+
+class NamedListDiff(BaseModel):
+    missing_on_instance: list[str] = []
+    extra_on_instance: list[str] = []
+    changed: list[ChangedItem] = []
+
+
+class CustomFieldsDiffResult(BaseModel):
+    status: str  # in_sync / drift / error
+    custom_fields: Optional[NamedListDiff] = None
+    custom_field_choice_sets: Optional[NamedListDiff] = None
+
+
+class DriftRecordOut(BaseModel):
+    id: str
+    instance_id: str
+    instance_name: str
+    repo_target_id: str
+    repo_target_name: str
+    kind: str  # "device_type" or "custom_fields"
+    file_path: str
+    status: str
+    diff: Optional[Union[DiffResult, CustomFieldsDiffResult]] = None
+    checked_at: datetime
+    last_full_check: Optional[datetime] = None
+    reused: Optional[bool] = None
+    checks_since_full: Optional[int] = None
+
+
+# ---------- Audit log ----------
+
+class AuditLogEntryOut(BaseModel):
+    id: str
+    created_at: datetime
+    action_type: str  # "netbox" or "github"
+    target_name: str
+    repo_target_id: str
+    repo_target_name: str
+    file_path: str
+    status: str
+    detail: Optional[str] = None
+    actor_sub: Optional[str] = None
+    actor_name: Optional[str] = None
+    actor_email: Optional[str] = None
+    resource_type: Optional[str] = None
+    resource_id: Optional[str] = None
+
+
+# ---------- Fleet visibility ----------
+
+class TokenExpiryInfo(BaseModel):
+    known: bool
+    expires: Optional[str] = None
+    note: Optional[str] = None
+
+
+class InstanceHealthOut(BaseModel):
+    instance_id: str
+    instance_name: str
+    reachable: bool
+    netbox_version: Optional[str] = None
+    python_version: Optional[str] = None
+    plugins: dict[str, Any] = {}
+    response_time_ms: Optional[int] = None
+    error: Optional[str] = None
+    token_expiry: TokenExpiryInfo
+
+
+class GithubTokenStatusOut(BaseModel):
+    target_id: str
+    target_name: str
+    token_expiry: TokenExpiryInfo
+
+
+class CoverageEntry(BaseModel):
+    instance_id: str
+    instance_name: str
+    status: str  # in_sync / drift / missing / error
+    error: Optional[str] = None
+    image_warnings: list[str] = []
+
+
+# ---------- Bulk import from a device-type library ----------
+
+class DeviceTypePreview(BaseModel):
+    """
+    A lightweight summary of one device type's full definition, fetched on
+    demand (not during scan, which stays cheap by design) so the bulk-import
+    pickers can show what's actually inside a candidate — including its
+    custom field values — before it's imported.
+    """
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    slug: Optional[str] = None
+    part_number: Optional[str] = None
+    component_counts: dict[str, int] = {}
+    custom_fields: dict[str, Any] = {}
+    image_status: dict[str, str] = {}
+
+
+class BulkImportScanRequest(BaseModel):
+    source_repo: str  # "owner/repo", e.g. netbox-community/devicetype-library
+    source_branch: str = "main"
+    source_base_dir: str = "device-types"
+    source_pat: Optional[str] = None  # falls back to this target's own PAT if omitted
+
+
+class RackBulkImportScanRequest(BulkImportScanRequest):
+    source_base_dir: str = "rack-types"
+
+
+class BulkImportScanEntry(BaseModel):
+    path: str
+    manufacturer_guess: Optional[str] = None
+    slug_guess: Optional[str] = None
+    model: Optional[str] = None
+    part_number: Optional[str] = None
+
+
+class BulkImportPreviewRequest(BaseModel):
+    source_repo: str
+    source_branch: str = "main"
+    source_pat: Optional[str] = None
+    path: str
+
+
+class BulkImportImagePreviewRequest(BulkImportPreviewRequest):
+    side: Literal["front", "rear"]
+
+
+class ImagePreviewOut(BaseModel):
+    side: Literal["front", "rear"]
+    filename: str
+    content_type: str
+    content_base64: str
+
+
+class ImageFileRequest(BaseModel):
+    side: Literal["front", "rear"]
+    filename: str
+    content_type: str
+    content_base64: str
+    commit_message: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class DeleteImageRequest(BaseModel):
+    side: Literal["front", "rear"]
+    commit_message: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class BulkImportRequest(BaseModel):
+    source_repo: str
+    source_branch: str = "main"
+    source_pat: Optional[str] = None
+    paths: list[str]  # source paths selected to import
+    commit_message: Optional[str] = None
+    pr_title: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class BulkImportFailure(BaseModel):
+    path: str
+    error: str
+
+
+class BulkImportResult(BaseModel):
+    branch: str
+    pr_number: Optional[int] = None
+    pr_url: Optional[str] = None
+    imported: list[str] = []
+    skipped_existing: list[str] = []
+    failed: list[BulkImportFailure] = []
+
+
+# ---------- Import device types from a NetBox instance into git ----------
+
+class ImportFromNetboxScanRequest(BaseModel):
+    instance_id: str
+
+
+class ImportFromNetboxScanEntry(BaseModel):
+    manufacturer: str
+    model: str
+    slug: str
+    part_number: Optional[str] = None
+    u_height: Optional[float] = None
+
+
+class DeviceTypeKey(BaseModel):
+    manufacturer: str
+    slug: str
+
+
+class ImportFromNetboxPreviewRequest(DeviceTypeKey):
+    instance_id: str
+
+
+class ImportFromNetboxImagePreviewRequest(ImportFromNetboxPreviewRequest):
+    side: Literal["front", "rear"]
+
+
+class ImportFromNetboxRequest(BaseModel):
+    instance_id: str
+    selections: list[DeviceTypeKey]
+    commit_message: Optional[str] = None
+    pr_title: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class ModuleTypeKey(BaseModel):
+    manufacturer: str
+    model: str
+
+
+class ModuleImportFromNetboxPreviewRequest(ModuleTypeKey):
+    instance_id: str
+
+
+class ModuleImportFromNetboxImagePreviewRequest(ModuleImportFromNetboxPreviewRequest):
+    side: Literal["front", "rear"]
+
+
+class ModuleImportFromNetboxRequest(BaseModel):
+    instance_id: str
+    selections: list[ModuleTypeKey]
+    commit_message: Optional[str] = None
+    pr_title: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class RackImportFromNetboxPreviewRequest(DeviceTypeKey):
+    instance_id: str
+
+
+class RackImportFromNetboxRequest(BaseModel):
+    instance_id: str
+    selections: list[DeviceTypeKey]
+    commit_message: Optional[str] = None
+    pr_title: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class NdxSearchRequest(BaseModel):
+    query: str = ""
+    limit: int = 200
+
+
+class NdxSearchEntry(BaseModel):
+    vendor_slug: str
+    vendor_name: str
+    manufacturer: str
+    model: str
+    slug: str
+    part_number: Optional[str] = None
+    u_height: Optional[float] = None
+    source: Optional[str] = None
+
+
+class NdxDeviceKey(BaseModel):
+    vendor_slug: str
+    slug: str
+
+
+class NdxImportRequest(BaseModel):
+    selections: list[NdxDeviceKey] = Field(max_length=100)
+    commit_message: Optional[str] = None
+    pr_title: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+# ---------- Syslog forwarding (read-only, config-file driven) ----------
+
+class SyslogSettingsOut(BaseModel):
+    enabled: bool
+    protocol: str
+    host: str
+    port: int
+    facility: str
+    app_name: str
+
+
+class SyslogTestResult(BaseModel):
+    ok: bool
+    detail: str
+
+
+# ---------- Access control (RBAC) ----------
+
+class LocalLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AccessMappingCreate(BaseModel):
+    oidc_group: str
+    role: Optional[str] = None
+    resource_type: str = "*"
+    resource_id: str = "*"
+
+
+class AccessMappingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    oidc_group: str
+    role: Optional[str] = None
+    resource_type: str
+    resource_id: str
+    resource_name: str  # resolved for display, since the UI shouldn't have to cross-reference IDs itself
+    created_at: datetime
+    updated_at: datetime
+
+
+class CurrentAccessOut(BaseModel):
+    role: str
+    groups: list[str]
+    scoping_active: bool
+    app_admin: bool
+    editable: dict[str, list[str]]
+
+
+# ---------- Custom-fields template ----------
+
+class CustomFieldsTemplateOut(BaseModel):
+    repo_target_id: str
+    path: str
+    exists: bool  # False when the file hasn't been created in the repo yet
+    sha: Optional[str] = None
+    payload: dict[str, Any]
+    open_pr: Optional[OpenPrInfo] = None
+
+
+class SaveCustomFieldsRequest(BaseModel):
+    payload: dict[str, Any]
+    sha: Optional[str] = None
+    commit_message: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class CustomFieldsImportScanRequest(BaseModel):
+    instance_id: str
+
+
+class ImportCandidate(BaseModel):
+    kind: str  # "custom_field" or "choice_set"
+    name: str
+    status: str  # "missing" (not in template at all) or "changed" (in template but differs)
+    payload: dict[str, Any]  # the instance's current definition, used if this item is selected for import
+    field_changes: list[FieldLevelChange] = []  # only populated when status == "changed"
+
+
+class CustomFieldsImportScanResult(BaseModel):
+    template_exists: bool
+    candidates: list[ImportCandidate]
+
+
+class ImportCandidateKey(BaseModel):
+    kind: str
+    name: str
+
+
+class ImportCustomFieldsSelectionRequest(BaseModel):
+    instance_id: str
+    selected: list[ImportCandidateKey]
+    commit_message: Optional[str] = None
+    pr_body: Optional[str] = None
+
+
+class CustomFieldScopeConfirmation(BaseModel):
+    token: str
+    typed_field_names: str
+    backup_acknowledged: bool = False
+    backup_opt_out_confirmation: Optional[str] = None
+
+
+class PushCustomFieldsRequest(BaseModel):
+    instance_ids: list[str] = []
+    tags: list[str] = []
+    overwrite: bool = False
+    confirmations: dict[str, CustomFieldScopeConfirmation] = {}
+
+
+class PreviewCustomFieldsPushRequest(BaseModel):
+    instance_ids: list[str] = []
+    tags: list[str] = []
+    overwrite: bool = False
+    include_backup: bool = True
+
+
+class MigrationMappingOverride(BaseModel):
+    action: str  # "map" | "skip" | "create"
+    target_id: int | None = None
+
+
+class MigrationMappingSkeletonRow(BaseModel):
+    override_key: str
+    object_type: str
+    source_id: int
+    source_natural_key: str
+    auto_match: str
+    target_id: int | None = None
+    target_natural_key: str | None = None
+    match_detail: str | None = None
+    action: str | None = None
+
+
+class MigrationTargetOption(BaseModel):
+    id: int
+    label: str
+
+
+class MigrationPreflightSide(BaseModel):
+    reachable: bool
+    token_valid: bool
+    netbox_version: str | None = None
+    detail: str | None = None
+    write_permission_checked: bool | None = None
+    write_permission_ok: bool | None = None
+
+
+class MigrationPreflightResponse(BaseModel):
+    source: MigrationPreflightSide
+    target: MigrationPreflightSide
+
+
+class MigrationPreflightRequest(BaseModel):
+    source_instance_id: str | None
+    target_instance_id: str | None
+
+
+class MigrationPlanRequest(BaseModel):
+    source_instance_id: str
+    target_instance_id: str
+    selected_types: list[str]
+    tenant_filter: list[str] = []
+    include_untenanted: bool = False
+    # Key is "type_key:source_id", e.g. "dcim.site:12" — JSON object keys must be strings,
+    # so the (type, id) tuple used internally is encoded/decoded at the router boundary.
+    mapping_overrides: dict[str, MigrationMappingOverride] = {}
+    conflict_policy: dict[str, str] = {}  # "default" plus any per-type override; skip/update/update_empty_only
+    marker_tag: bool = True
+    fail_fast: bool = False
+    max_requests_per_second: float = 4.0
+    max_batch_size: int = Field(default=100, ge=0, le=100)
+    job_id: str | None = None  # re-plan an existing job in place (e.g. after editing the mapping table)
+
+
+class MigrationJobSummary(BaseModel):
+    id: str
+    source_instance_id: str
+    target_instance_id: str
+    source_instance_name: str | None = None
+    target_instance_name: str | None = None
+    status: str
+    phase: str
+    current_step: str | None = None
+    tenant_filter: list[str]
+    selected_types: list[str]
+    totals: dict
+    warnings: list[str]
+    created_at: datetime
+    started_at: datetime | None
+    last_heartbeat_at: datetime | None
+    finished_at: datetime | None
+    actor_name: str | None = None
+
+
+class MigrationExecuteRequest(BaseModel):
+    confirm: bool = False
+
+
+class MigrationRollbackResponse(BaseModel):
+    job: MigrationJobSummary
+    detail: str
+    deleted: int
+    failed: int
+    untouched_mapped: int
+    untouched_updated: int
+
+
+class ExportFieldSelection(BaseModel):
+    optional: list[str] = []
+    custom_fields: list[str] = []
+
+
+class ExportCreateRequest(BaseModel):
+    instance_id: str
+    tenant_id: int
+    object_types: list[str]
+    fields: dict[str, ExportFieldSelection] = {}
+    format: str
+    delimiter: str = ","
+
+
+class ExportJobSummary(BaseModel):
+    id: str
+    instance_id: str | None
+    instance_name: str
+    tenant_id: int
+    tenant_name: str
+    tenant_slug: str
+    object_types: list[str]
+    fields: dict
+    format: str
+    delimiter: str
+    status: str
+    progress: dict
+    row_counts: dict
+    error: str | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    expires_at: datetime | None
+    file_name: str | None
+    file_size: int | None
+    download_name: str
+
+
+class RestoreCustomFieldsRequest(BaseModel):
+    instance_id: str
+    backup: dict[str, Any]
+    dry_run: bool = True
+
+
+class InstanceCustomFieldsDiffResult(BaseModel):
+    instance_id: str
+    instance_name: str
+    diff: Optional[CustomFieldsDiffResult] = None
+    error: Optional[str] = None
+
+
+# ---------- Cross-instance search ----------
+
+class SearchResultItem(BaseModel):
+    id: int
+    name: str
+    serial: Optional[str] = None
+    type_display: Optional[str] = None
+    site: Optional[str] = None
+    status: Optional[str] = None
+    url: str
+
+
+class InstanceSearchResult(BaseModel):
+    instance_id: str
+    instance_name: str
+    devices: list[SearchResultItem] = []
+    virtual_machines: list[SearchResultItem] = []
+    virtual_device_contexts: list[SearchResultItem] = []
+    ip_addresses: list[SearchResultItem] = []
+    prefixes: list[SearchResultItem] = []
+    mac_addresses: list[SearchResultItem] = []
+    truncated: dict[str, bool] = {}
+    error: Optional[str] = None
+
+
+class SearchResponse(BaseModel):
+    query: str
+    results: list[InstanceSearchResult]
+
+
+class SaveResult(BaseModel):
+    path: str
+    sha: str
+    pr_number: int
+    pr_url: str

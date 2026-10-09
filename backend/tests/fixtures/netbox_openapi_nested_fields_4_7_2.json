@@ -1,0 +1,434 @@
+{
+  "nested_fields": {
+    "circuits.circuit": [
+      "assignments",
+      "owner",
+      "provider",
+      "provider_account",
+      "tags",
+      "tenant",
+      "termination_a",
+      "termination_z",
+      "type"
+    ],
+    "circuits.circuittermination": [
+      "cable",
+      "circuit",
+      "tags"
+    ],
+    "circuits.circuittype": [
+      "owner",
+      "tags"
+    ],
+    "circuits.provider": [
+      "accounts",
+      "asns",
+      "owner",
+      "tags"
+    ],
+    "circuits.providernetwork": [
+      "owner",
+      "provider",
+      "tags"
+    ],
+    "dcim.cable": [
+      "a_terminations",
+      "b_terminations",
+      "bundle",
+      "owner",
+      "tags",
+      "tenant"
+    ],
+    "dcim.consoleport": [
+      "cable",
+      "device",
+      "module",
+      "owner",
+      "tags"
+    ],
+    "dcim.consoleserverport": [
+      "cable",
+      "device",
+      "module",
+      "owner",
+      "tags"
+    ],
+    "dcim.device": [
+      "cluster",
+      "config_template",
+      "device_type",
+      "location",
+      "oob_ip",
+      "owner",
+      "parent_device",
+      "platform",
+      "primary_ip",
+      "primary_ip4",
+      "primary_ip6",
+      "rack",
+      "role",
+      "site",
+      "tags",
+      "tenant",
+      "virtual_chassis"
+    ],
+    "dcim.virtualdevicecontext": [
+      "device",
+      "owner",
+      "primary_ip",
+      "primary_ip4",
+      "primary_ip6",
+      "tags",
+      "tenant"
+    ],
+    "dcim.devicebay": [
+      "device",
+      "installed_device",
+      "owner",
+      "tags"
+    ],
+    "dcim.devicerole": [
+      "config_template",
+      "owner",
+      "parent",
+      "tags"
+    ],
+    "dcim.devicetype": [
+      "default_platform",
+      "manufacturer",
+      "owner",
+      "tags"
+    ],
+    "dcim.frontport": [
+      "cable",
+      "device",
+      "module",
+      "owner",
+      "rear_ports",
+      "tags"
+    ],
+    "dcim.interface": [
+      "bridge",
+      "bridge_interfaces",
+      "cable",
+      "device",
+      "l2vpn_termination",
+      "lag",
+      "mac_addresses",
+      "module",
+      "owner",
+      "parent",
+      "primary_mac_address",
+      "qinq_svlan",
+      "tagged_vlans",
+      "tags",
+      "untagged_vlan",
+      "vdcs",
+      "vlan_translation_policy",
+      "vrf",
+      "wireless_lans",
+      "wireless_link"
+    ],
+    "dcim.inventoryitem": [
+      "device",
+      "manufacturer",
+      "owner",
+      "role",
+      "tags"
+    ],
+    "dcim.location": [
+      "owner",
+      "parent",
+      "site",
+      "tags",
+      "tenant"
+    ],
+    "dcim.macaddress": [
+      "owner",
+      "tags"
+    ],
+    "dcim.manufacturer": [
+      "owner",
+      "tags"
+    ],
+    "dcim.module": [
+      "device",
+      "module_bay",
+      "module_type",
+      "owner",
+      "tags"
+    ],
+    "dcim.modulebay": [
+      "device",
+      "installed_module",
+      "module",
+      "module_bay_types",
+      "owner",
+      "tags"
+    ],
+    "dcim.moduletype": [
+      "manufacturer",
+      "module_bay_types",
+      "owner",
+      "profile",
+      "tags"
+    ],
+    "dcim.platform": [
+      "config_template",
+      "manufacturer",
+      "owner",
+      "parent",
+      "tags"
+    ],
+    "dcim.powerfeed": [
+      "cable",
+      "owner",
+      "power_panel",
+      "rack",
+      "tags",
+      "tenant"
+    ],
+    "dcim.poweroutlet": [
+      "cable",
+      "device",
+      "module",
+      "owner",
+      "power_port",
+      "tags"
+    ],
+    "dcim.powerpanel": [
+      "location",
+      "owner",
+      "site",
+      "tags"
+    ],
+    "dcim.powerport": [
+      "cable",
+      "device",
+      "module",
+      "owner",
+      "tags"
+    ],
+    "dcim.rack": [
+      "group",
+      "location",
+      "owner",
+      "rack_type",
+      "role",
+      "site",
+      "tags",
+      "tenant"
+    ],
+    "dcim.rackrole": [
+      "owner",
+      "tags"
+    ],
+    "dcim.rearport": [
+      "cable",
+      "device",
+      "front_ports",
+      "module",
+      "owner",
+      "tags"
+    ],
+    "dcim.region": [
+      "owner",
+      "parent",
+      "tags"
+    ],
+    "dcim.site": [
+      "asns",
+      "group",
+      "owner",
+      "region",
+      "tags",
+      "tenant"
+    ],
+    "dcim.sitegroup": [
+      "owner",
+      "parent",
+      "tags"
+    ],
+    "dcim.virtualchassis": [
+      "master",
+      "members",
+      "owner",
+      "tags"
+    ],
+    "extras.configtemplate": [
+      "data_file",
+      "data_source",
+      "owner",
+      "tags"
+    ],
+    "extras.tag": [],
+    "ipam.aggregate": [
+      "owner",
+      "rir",
+      "tags",
+      "tenant"
+    ],
+    "ipam.asn": [
+      "owner",
+      "rir",
+      "role",
+      "sites",
+      "tags",
+      "tenant"
+    ],
+    "ipam.asnrange": [
+      "owner",
+      "rir",
+      "tags",
+      "tenant"
+    ],
+    "ipam.fhrpgroup": [
+      "ip_addresses",
+      "owner",
+      "tags"
+    ],
+    "ipam.fhrpgroupassignment": [
+      "group"
+    ],
+    "ipam.ipaddress": [
+      "nat_inside",
+      "nat_outside",
+      "owner",
+      "tags",
+      "tenant",
+      "vrf"
+    ],
+    "ipam.iprange": [
+      "owner",
+      "role",
+      "tags",
+      "tenant",
+      "vrf"
+    ],
+    "ipam.prefix": [
+      "owner",
+      "role",
+      "tags",
+      "tenant",
+      "vlan",
+      "vrf"
+    ],
+    "ipam.rir": [
+      "owner",
+      "tags"
+    ],
+    "ipam.role": [
+      "owner",
+      "tags"
+    ],
+    "ipam.service": [
+      "ipaddresses",
+      "owner",
+      "tags"
+    ],
+    "ipam.vlan": [
+      "group",
+      "l2vpn_termination",
+      "owner",
+      "qinq_svlan",
+      "role",
+      "site",
+      "tags",
+      "tenant"
+    ],
+    "ipam.vlangroup": [
+      "owner",
+      "tags",
+      "tenant",
+      "vid_ranges"
+    ],
+    "ipam.vlantranslationpolicy": [
+      "owner",
+      "rules",
+      "tags"
+    ],
+    "ipam.vlantranslationrule": [
+      "tags"
+    ],
+    "ipam.vrf": [
+      "export_targets",
+      "import_targets",
+      "owner",
+      "tags",
+      "tenant"
+    ],
+    "tenancy.tenant": [
+      "group",
+      "owner",
+      "tags"
+    ],
+    "tenancy.tenantgroup": [
+      "owner",
+      "parent",
+      "tags"
+    ],
+    "virtualization.cluster": [
+      "group",
+      "owner",
+      "tags",
+      "tenant",
+      "type"
+    ],
+    "virtualization.clustergroup": [
+      "owner",
+      "tags"
+    ],
+    "virtualization.clustertype": [
+      "owner",
+      "tags"
+    ],
+    "virtualization.virtualdisk": [
+      "owner",
+      "tags",
+      "virtual_machine"
+    ],
+    "virtualization.virtualmachine": [
+      "cluster",
+      "config_template",
+      "device",
+      "owner",
+      "platform",
+      "primary_ip",
+      "primary_ip4",
+      "primary_ip6",
+      "role",
+      "site",
+      "tags",
+      "tenant",
+      "virtual_machine_type"
+    ],
+    "virtualization.vminterface": [
+      "bridge",
+      "l2vpn_termination",
+      "mac_addresses",
+      "owner",
+      "parent",
+      "primary_mac_address",
+      "qinq_svlan",
+      "tagged_vlans",
+      "tags",
+      "untagged_vlan",
+      "virtual_machine",
+      "vlan_translation_policy",
+      "vrf"
+    ],
+    "vpn.l2vpn": [
+      "export_targets",
+      "import_targets",
+      "owner",
+      "tags",
+      "tenant"
+    ],
+    "vpn.l2vpntermination": [
+      "l2vpn",
+      "tags"
+    ]
+  },
+  "netbox_version": "4.7.2 (4.7)",
+  "source": "https://demo.netbox.dev/api/schema/?format=json"
+}
