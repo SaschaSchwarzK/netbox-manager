@@ -32,6 +32,24 @@ def test_execution_match_filters_ignore_blank_optional_identifiers():
     assert {"slug": "qfx5110-48s-4c"} in filters
 
 
+def test_execution_cable_match_filters_preserve_polymorphic_termination_lists():
+    a_terminations = [{"object_type": "dcim.interface", "object_id": 51}]
+    b_terminations = [{"object_type": "dcim.interface", "object_id": 53}]
+
+    filters = executor_mod._resolved_match_filters(
+        REGISTRY["dcim.cable"],
+        {},
+        {"a_terminations": a_terminations, "b_terminations": b_terminations},
+    )
+
+    assert filters == [{
+        "a_terminations": a_terminations,
+        "b_terminations": b_terminations,
+    }]
+    assert "a_terminations_id" not in filters[0]
+    assert "b_terminations_id" not in filters[0]
+
+
 @pytest.fixture
 def db():
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
@@ -981,7 +999,7 @@ def test_rollback_deletes_created_dependency_chain_in_reverse_order(db):
     assert deleted_types.index("dcim.devices") < deleted_types.index("dcim.sites")
 
 
-def test_rollback_never_touches_mapped_or_updated_objects(db):
+def test_rollback_leaves_mapped_and_legacy_unsnapshotted_updates_untouched(db):
     job = _make_job(db)
     job.status = "completed"
     items = [
@@ -996,6 +1014,35 @@ def test_rollback_never_touches_mapped_or_updated_objects(db):
 
     assert target.deleted == [("dcim.sites", 101)]
     assert {row["id"] for row in target.data["dcim.sites"]} == {102, 103}
+    assert job.status == "rolled_back_with_errors"
+    assert items[2].execution_status == "rollback_error"
+
+
+def test_execution_snapshots_and_rollback_restores_updated_object(db):
+    job = _make_job(db)
+    item = models.MigrationJobItem(
+        job_id=job.id, order_index=0, object_type="dcim.site", source_id=1,
+        source_natural_key="ams", planned_action="update", execution_status="pending",
+        target_id=101, payload_json=json.dumps({"name": "New name", "status": "planned"}),
+        fk_refs_json="{}",
+    )
+    db.add(item); db.commit()
+    target = FakeClient({"dcim.sites": [{
+        "id": 101, "slug": "ams", "name": "Original name",
+        "status": {"value": "active", "label": "Active"},
+    }]})
+
+    execute_job(db, job, registry=REGISTRY, target_client=target)
+
+    assert target.data["dcim.sites"][0]["name"] == "New name"
+    assert json.loads(item.previous_payload_json) == {"name": "Original name", "status": "active"}
+
+    rollback_job(db, job, registry=REGISTRY, target_client=target)
+
+    assert job.status == "rolled_back"
+    assert item.execution_status == "rolled_back"
+    assert target.data["dcim.sites"][0]["name"] == "Original name"
+    assert target.data["dcim.sites"][0]["status"] == "active"
 
 
 def test_rollback_crash_can_resume_without_double_delete(db):

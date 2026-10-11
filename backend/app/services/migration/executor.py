@@ -167,6 +167,12 @@ def _execute_one_item(
         # restored after the bulk-create refactor accidentally dropped this branch, which
         # left every conflict_policy="update" item hitting the else below and crashing the
         # whole job with an uncaught AssertionError.
+        if item.previous_payload_json is None:
+            current = target_client.get(endpoint, id=item.target_id)
+            if current is None:
+                raise MigrationApiError(f"Cannot snapshot {item.object_type} id={item.target_id}; it no longer exists")
+            item.previous_payload_json = json.dumps(_snapshot_payload(type_spec, dict(current), set(payload)))
+            db.commit()
         target_client.update_by_id(endpoint, item.target_id, payload)
     else:
         raise AssertionError(f"_execute_one_item called for non-executable action {item.planned_action!r}")
@@ -175,6 +181,35 @@ def _execute_one_item(
     item.executed_at = utcnow()
     db.commit()
     id_map.put(item.object_type, item.source_id, item.target_id)
+
+
+def _snapshot_payload(type_spec: TypeSpec, target_obj: dict[str, Any], fields: set[str]) -> dict[str, Any]:
+    """Convert selected REST response fields back into safe PATCH values."""
+    result: dict[str, Any] = {}
+    relation_fields = set(type_spec.field_map) | set(type_spec.deferred_field_map) | {UNIVERSAL_TAG_FIELD}
+    for field_name in fields:
+        value = target_obj.get(field_name)
+        if field_name in type_spec.polymorphic_list_field_map:
+            spec = type_spec.polymorphic_list_field_map[field_name]
+            result[field_name] = [
+                {
+                    spec.discriminator_field: entry.get(spec.discriminator_field),
+                    spec.object_id_field: entry.get(spec.object_id_field),
+                }
+                for entry in (value or []) if isinstance(entry, dict)
+            ]
+        elif field_name in relation_fields:
+            if isinstance(value, dict):
+                result[field_name] = value.get("id")
+            elif isinstance(value, list):
+                result[field_name] = [entry.get("id") if isinstance(entry, dict) else entry for entry in value]
+            else:
+                result[field_name] = value
+        elif isinstance(value, dict) and "value" in value:
+            result[field_name] = value["value"]
+        else:
+            result[field_name] = value
+    return result
 
 
 def _find_existing_by_natural_key(
@@ -213,7 +248,15 @@ def _resolved_match_filters(type_spec: TypeSpec, static_fields: dict, resolved_f
                 if value is None:
                     matchable = False
                     break
-                filters[f"{field_name}_id"] = value
+                # Polymorphic list relations (currently cable termination
+                # sets) are already in NetBox's writable/filterable shape:
+                # [{"object_type": ..., "object_id": ...}].  Appending
+                # ``_id`` turns them into invalid scalar-FK filters and can
+                # make NetBox return several unrelated cables.
+                if field_name in type_spec.polymorphic_list_field_map:
+                    filters[field_name] = value
+                else:
+                    filters[f"{field_name}_id"] = value
             else:
                 value = static_fields.get(field_name)
                 # Keep execution's duplicate-prevention lookup identical to
@@ -596,6 +639,16 @@ def _execute_pending_patches(
             try:
                 endpoint = resolve_endpoint(target_client.nb, type_spec.endpoint)
                 if merged:
+                    if patch.previous_payload_json is None:
+                        current = target_client.get(endpoint, id=target_id)
+                        if current is None:
+                            raise MigrationApiError(
+                                f"Cannot snapshot deferred patch target {patch.object_type} id={target_id}; it no longer exists"
+                            )
+                        patch.previous_payload_json = json.dumps(
+                            _snapshot_payload(type_spec, dict(current), set(merged)),
+                        )
+                        db.commit()
                     target_client.update_by_id(endpoint, target_id, merged)
                 if all_errors:
                     patch.execution_status = "error"

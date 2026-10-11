@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app import crypto, models, schemas
 from app.auth import get_current_actor
 from app.database import SessionLocal, get_db
-from app.rbac import AccessContext, filter_scoped, require_resource_admin, require_resource_role, require_role, require_visible
+from app.rbac import AccessContext, filter_scoped, require_app_admin, require_resource_admin, require_resource_role, require_role, require_visible
 from app.services.migration import registry as registry_mod
 from app.services.migration.client import build_client
 from app.services.migration.executor import execute_job
@@ -37,6 +37,11 @@ router = APIRouter(prefix="/api/migrations", tags=["migrations"])
 
 _worker_threads: dict[str, threading.Thread] = {}
 _worker_threads_lock = threading.Lock()
+
+_DELETABLE_JOB_STATUSES = {
+    "planned", "completed", "completed_with_errors", "cancelled", "failed",
+    "rolled_back", "rolled_back_with_errors",
+}
 
 
 def claim_job(db: Session, job_id: str, from_statuses: set[str], to_status: str) -> bool:
@@ -185,8 +190,8 @@ def plan_migration(
     if unknown:
         raise HTTPException(400, f"Unknown or non-selectable type(s): {sorted(unknown)}")
 
-    _get_instance_or_404(db, payload.source_instance_id)
-    _get_instance_or_404(db, payload.target_instance_id)
+    source_instance = _get_instance_or_404(db, payload.source_instance_id)
+    target_instance = _get_instance_or_404(db, payload.target_instance_id)
     # Validate the user-supplied mapping syntax before returning an accepted job;
     # all network and planning work happens in the worker below.
     _decode_mapping_overrides(payload.mapping_overrides)
@@ -226,6 +231,12 @@ def plan_migration(
     job.finished_at = None
     db.commit()
     db.refresh(job)
+    tenant_text = f" for tenant(s) {', '.join(payload.tenant_filter)}" if payload.tenant_filter else ""
+    if hasattr(request, "state"):
+        request.state.nbm_audit_event = {
+            "action": "plan_migration", "resource_type": "migration", "resource_id": job.id,
+            "detail": f"Planned data migration{tenant_text} from NetBox instance {source_instance.name} to {target_instance.name}.",
+        }
 
     summary = _job_summary(db, job)
     db.commit()  # release SQLite's read transaction before the worker starts writing
@@ -341,6 +352,34 @@ def list_jobs(db: Session = Depends(get_db), ctx: AccessContext = Depends(requir
     return [_job_summary(db, job) for job in jobs]
 
 
+def _delete_job_rows(db: Session, job_ids: list[str]) -> None:
+    """Delete report source rows before their parent jobs in one transaction."""
+    if not job_ids:
+        return
+    db.query(models.MigrationJobPatch).filter(models.MigrationJobPatch.job_id.in_(job_ids)).delete(
+        synchronize_session=False,
+    )
+    db.query(models.MigrationJobItem).filter(models.MigrationJobItem.job_id.in_(job_ids)).delete(
+        synchronize_session=False,
+    )
+    db.query(models.MigrationJob).filter(models.MigrationJob.id.in_(job_ids)).delete(
+        synchronize_session=False,
+    )
+
+
+@router.delete("/history")
+def clear_migration_history(
+    db: Session = Depends(get_db), _ctx: AccessContext = Depends(require_app_admin()),
+):
+    """Delete every inactive migration and its dynamically generated report."""
+    job_ids = [row[0] for row in db.query(models.MigrationJob.id).filter(
+        models.MigrationJob.status.in_(_DELETABLE_JOB_STATUSES),
+    ).all()]
+    _delete_job_rows(db, job_ids)
+    db.commit()
+    return {"deleted": len(job_ids)}
+
+
 @router.get("/jobs/{job_id}", response_model=schemas.MigrationJobSummary)
 def get_job(job_id: str, db: Session = Depends(get_db), _: AccessContext = Depends(require_role("viewer"))):
     job = db.get(models.MigrationJob, job_id)
@@ -351,6 +390,22 @@ def get_job(job_id: str, db: Session = Depends(get_db), _: AccessContext = Depen
     result = _job_summary(db, job)
     db.commit()  # release the polling read transaction while the worker writes progress
     return result
+
+
+@router.delete("/jobs/{job_id}")
+def delete_migration_job(
+    job_id: str, db: Session = Depends(get_db), ctx: AccessContext = Depends(require_role("editor")),
+):
+    """Delete one inactive migration and the rows backing its report."""
+    job = db.get(models.MigrationJob, job_id)
+    if job is None:
+        raise HTTPException(404, "Migration job not found.")
+    require_resource_admin(ctx, "instance", job.target_instance_id, db)
+    if job.status not in _DELETABLE_JOB_STATUSES:
+        raise HTTPException(409, f"Job is in status={job.status!r}; active migration history cannot be deleted.")
+    _delete_job_rows(db, [job.id])
+    db.commit()
+    return {"deleted": 1}
 
 
 @router.get("/jobs/{job_id}/mapping-skeleton", response_model=list[schemas.MigrationMappingSkeletonRow])
@@ -453,7 +508,7 @@ def _run_in_background(job_id: str, max_rps: float) -> None:
 @router.post("/jobs/{job_id}/execute", response_model=schemas.MigrationJobSummary)
 def execute_migration(
     job_id: str, payload: schemas.MigrationExecuteRequest,
-    db: Session = Depends(get_db), ctx: AccessContext = Depends(require_role("editor")),
+    request: Request, db: Session = Depends(get_db), ctx: AccessContext = Depends(require_role("editor")),
 ):
     job = db.get(models.MigrationJob, job_id)
     if job is None:
@@ -479,6 +534,13 @@ def execute_migration(
     # same job. Besides giving callers a deterministic "running" response,
     # this avoids concurrent access to one SQLite connection in tests.
     db.refresh(job)
+    source_instance = _get_instance_or_404(db, job.source_instance_id)
+    target_instance = _get_instance_or_404(db, job.target_instance_id)
+    if hasattr(request, "state"):
+        request.state.nbm_audit_event = {
+            "action": "execute_migration", "resource_type": "migration", "resource_id": job.id,
+            "detail": f"Started data migration from NetBox instance {source_instance.name} to {target_instance.name}.",
+        }
     summary = _job_summary(db, job)
     db.commit()  # release SQLite's read transaction before the worker starts writing
 
@@ -576,13 +638,13 @@ def rollback_migration(
     ).count()
     untouched_updated = db.query(models.MigrationJobItem).filter_by(
         job_id=job.id, planned_action="update",
-    ).count()
+    ).filter(models.MigrationJobItem.previous_payload_json.is_(None)).count()
     return schemas.MigrationRollbackResponse(
         job=_job_summary(db, job),
         detail=(
             "Best-effort rollback deleted only objects created by this job. "
-            "Mapped and updated objects were not touched because their prior state was not recorded; "
-            "patches on surviving objects were also left unchanged. The marker tag definitions were retained."
+            "Updated objects with pre-change snapshots were restored; mapped objects were not touched. "
+            "Updates from older migrations without snapshots cannot be restored. The marker tag definitions were retained."
         ),
         deleted=deleted,
         failed=failed,

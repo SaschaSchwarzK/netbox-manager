@@ -367,7 +367,9 @@ class AuditLogEntryOut(BaseModel):
     created_at: datetime
     action_type: str  # "netbox" or "github"
     target_name: str
-    repo_target_id: str
+    # Generic application audit events are not tied to a GitHub target. Push
+    # history rows can also retain no target after that target is deleted.
+    repo_target_id: Optional[str] = None
     repo_target_name: str
     file_path: str
     status: str
@@ -377,6 +379,8 @@ class AuditLogEntryOut(BaseModel):
     actor_email: Optional[str] = None
     resource_type: Optional[str] = None
     resource_id: Optional[str] = None
+    feature: str
+    activity: str
 
 
 # ---------- Fleet visibility ----------

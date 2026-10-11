@@ -32,7 +32,8 @@ target that is scoped to other groups.
 
 Depending on the deployment, the sign-in screen can offer:
 
-- **Sign in with SSO** for the configured OIDC identity provider.
+- **Sign in with SSO** for the configured OIDC identity provider. Administrators can follow the
+  [SSO and OIDC configuration guide](oidc-sso.md) to configure claims and permission mappings.
 - **Break-glass local administrator login** for recovery when the identity provider is unavailable.
 
 The local account is a full application administrator and should only be used for recovery.
@@ -192,7 +193,38 @@ Keep these safety rules in mind:
 
 ![Reference Data](images/user-guide/reference-data.png)
 
-## 10. Monitor fleet health and drift
+## 10. Automate owner permissions
+
+The **Owner Permissions** page is the recommended permission automation workflow for new
+deployments. It creates one shared RO group and one shared RW group per NetBox instance and uses
+generic constraints such as `{"owner__users": "$user"}`. NetBox replaces `"$user"` with the
+authenticated NetBox user's ID, so the same Object Permissions serve every Owner on the instance.
+
+Create Owners and their user assignments in NetBox, assign Owners to resources, then use the page
+to manage templates, reconcile the shared groups, preview and apply fleet-wide updates, and safely
+decommission the managed groups. NetBox Manager does not manage Owner membership, OIDC mappings,
+or NetBox group membership. See [Owner Permission Automation](owner-permissions.md) for template
+syntax, verified lookup paths, `$user` semantics, generated state, and troubleshooting.
+
+Owner Permissions normally require fewer NetBox groups and Object Permission records than
+tenant-specific policies. Direct owner constraints can also require fewer relationship lookups
+during NetBox queryset filtering. Prefer this workflow whenever ownership accurately represents
+the intended access boundary.
+
+## 11. Automate tenant permissions
+
+> [!NOTE]
+> Tenant Permissions are kept for compatibility with existing deployments. New deployments should
+> normally use [Owner Permissions](owner-permissions.md), which reuse generic per-instance policies
+> and avoid duplicating groups and Object Permissions for each tenant.
+
+The **Tenant Permissions** page manages reusable Git-backed permission templates, creates
+tenant-specific RO and RW groups, plans fleet-wide policy updates, and safely decommissions managed
+groups. User membership remains the responsibility of NetBox's OIDC or SSO integration. See the
+dedicated [Tenant Permission Automation](tenant-permissions.md) guide for template syntax,
+onboarding, generated state, safety controls, and troubleshooting.
+
+## 12. Monitor fleet health and drift
 
 Use **Fleet** to check NetBox reachability, versions, installed plugins, response time, and
 available token-expiry information. Resolve connectivity or credential warnings before a large
@@ -209,7 +241,7 @@ by the administrator.
 
 ![Drift results](images/user-guide/drift.png)
 
-## 11. Migrate data between NetBox instances
+## 13. Migrate data between NetBox instances
 
 > [!CAUTION]
 > **Data migration is still under testing.** It writes directly to the target NetBox instance and
@@ -285,7 +317,7 @@ After the migration the is completed the table and the report will be updated:
 
 ![Migration Tags](images/user-guide/data-migration-result.png)
 
-## 12. Export tenant data
+## 14. Export tenant data
 
 Open **Data Export**, choose one visible NetBox instance and tenant, then select Devices, Virtual
 Device Contexts, and/or Virtual Machines. Fixed identity fields are always included. Optional
@@ -306,7 +338,7 @@ open deployment share its jobs.
 
 ![Data Export](images/user-guide/data-export.png)
 
-## 13. Review audit and syslog status
+## 15. Review audit and syslog status
 
 The **Audit Log** records GitHub saves and NetBox pushes, including the actor, target, status, and
 details. Failed and rejected actions are retained as well as successful actions.
@@ -316,7 +348,7 @@ settings are read-only in the UI and must be changed through deployment configur
 
 ![Audit log](images/user-guide/audit-log.png)
 
-## 14. Manage access mappings
+## 16. Manage access mappings
 
 This page is visible only to application administrators. Each row maps one OIDC group to a role
 and a scope:
@@ -332,7 +364,7 @@ admin group configured so administrators can recover from mapping mistakes.
 
 ![Access mappings](images/user-guide/access-mappings.png)
 
-## 15. Common problems
+## 17. Common problems
 
 | Symptom | What to check |
 |---|---|

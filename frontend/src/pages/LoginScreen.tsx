@@ -32,6 +32,14 @@ export default function LoginScreen({ auth }: { auth: AuthMeResponse }) {
         </div>
         <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 20 }}>Sign in to continue.</p>
 
+        {!!auth.configuration_errors?.length && (
+          <div style={{ textAlign: "left", color: "var(--danger)", fontSize: 12 }}>
+            <strong>Configuration error</strong>
+            <ul>{auth.configuration_errors.map((value) => <li key={value}>{value}</li>)}</ul>
+            <p>Correct the container environment and recreate the container.</p>
+          </div>
+        )}
+
         {auth.oidc_enabled && (
           <a href="/api/auth/login">
             <button className="primary" style={{ width: "100%" }}>Sign in with SSO</button>

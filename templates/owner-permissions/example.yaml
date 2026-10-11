@@ -1,0 +1,10 @@
+name: example
+version: 1
+description: Example owner policy for devices and their components.
+permissions:
+  - object_type: dcim.device
+    owner_relation: owner__users
+    actions: [view, add, change, delete]
+  - object_type: dcim.interface
+    owner_relation: device__owner__users
+    actions: [view, add, change, delete]

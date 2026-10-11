@@ -13,7 +13,12 @@ from app.rbac import AccessContext, filter_scoped, get_access_context, has_role_
 from app.routers.device_types import _get_target, _log_action
 from app.services import netbox_client
 from app.services.tenant_permission_backends import GithubPermissionRepo, RequestsNetBox
-from app.tenant_permissions import MembersPresentError, TenantManager, TenantPermissionError, load_policy_files, validate_template, validate_template_name
+from app.tenant_permissions import (
+    LEGACY_TENANT_STATE_ROOT, LEGACY_TENANT_TEMPLATE_ROOT, TENANT_STATE_ROOT,
+    TENANT_TEMPLATE_ROOT, MembersPresentError,
+    TenantManager, TenantPermissionError, load_policy_files, tenant_state_base,
+    validate_template, validate_template_name,
+)
 
 router = APIRouter(prefix="/api/repos/{target_id}/tenant-permissions", tags=["tenant-permissions"])
 
@@ -107,15 +112,45 @@ def _audit_repo_save(db: Session, target, path: str, result: dict[str, Any], act
                action_type="github")
 
 
+def _managed_metadata_paths(repo):
+    """Yield new tracking paths first, with read compatibility for legacy state."""
+    found: set[tuple[str, str]] = set()
+    layouts = (
+        (TENANT_STATE_ROOT + "/", 2, 4, 6),
+        (LEGACY_TENANT_STATE_ROOT + "/", 1, 3, 5),
+    )
+    for prefix, instance_index, tenant_index, length in layouts:
+        for path in repo.list_paths(prefix):
+            parts = path.split("/")
+            if not path.endswith("/metadata.yaml") or len(parts) != length:
+                continue
+            key = (parts[instance_index], parts[tenant_index])
+            if key in found:
+                continue
+            found.add(key)
+            yield path, key[0], key[1]
+
+
 @router.get("/templates")
 def list_templates(target_id: str, db: Session = Depends(get_db), ctx: AccessContext = Depends(get_access_context)):
     target = _get_target(target_id, db, ctx)
     repo = _repo(target)
-    paths = [p for p in repo.list_paths("templates/") if p.endswith((".yaml", ".yml"))]
+    paths = [
+        p for p in repo.list_paths(TENANT_TEMPLATE_ROOT + "/")
+        if p.endswith((".yaml", ".yml"))
+    ]
+    for path in repo.list_paths(LEGACY_TENANT_TEMPLATE_ROOT + "/"):
+        parts = path.split("/")
+        is_legacy = len(parts) == 2 or (len(parts) == 3 and parts[1] == "custom")
+        if is_legacy and path.endswith((".yaml", ".yml")):
+            paths.append(path)
     results = []
+    seen = set()
     for path in paths:
         payload = repo.read_yaml(path)
-        if payload:
+        name = payload.get("name") if payload else None
+        if payload and name not in seen:
+            seen.add(name)
             results.append({"name": payload.get("name"), "version": payload.get("version"),
                             "description": payload.get("description"), "path": path})
     return sorted(results, key=lambda row: (row.get("name") or ""))
@@ -126,7 +161,12 @@ def get_template(target_id: str, name: str, db: Session = Depends(get_db), ctx: 
     _handle(lambda: validate_template_name(name))
     target = _get_target(target_id, db, ctx)
     repo = _repo(target)
-    for path in (f"templates/custom/{name}.yaml", f"templates/{name}.yaml"):
+    for path in (
+        f"{TENANT_TEMPLATE_ROOT}/custom/{name}.yaml",
+        f"{TENANT_TEMPLATE_ROOT}/{name}.yaml",
+        f"{LEGACY_TENANT_TEMPLATE_ROOT}/custom/{name}.yaml",
+        f"{LEGACY_TENANT_TEMPLATE_ROOT}/{name}.yaml",
+    ):
         payload = repo.read_yaml(path)
         if payload is not None:
             return {"path": path, "payload": payload}
@@ -150,11 +190,17 @@ def save_template(target_id: str, payload: SaveTemplatePayload, request: Request
     name = normalized["name"]
     if payload.previous_name:
         _handle(lambda: validate_template_name(payload.previous_name))
-    path = f"templates/custom/{name}.yaml"
+    path = f"{TENANT_TEMPLATE_ROOT}/custom/{name}.yaml"
     changes: dict[str, dict[str, Any] | None] = {path: normalized}
-    previous_path = f"templates/custom/{payload.previous_name}.yaml" if payload.previous_name else None
+    previous_path = f"{TENANT_TEMPLATE_ROOT}/custom/{payload.previous_name}.yaml" if payload.previous_name else None
     if previous_path and payload.previous_name != name and _repo(target).read_yaml(previous_path) is not None:
         changes[previous_path] = None
+    legacy_previous = (
+        f"{LEGACY_TENANT_TEMPLATE_ROOT}/custom/{payload.previous_name}.yaml"
+        if payload.previous_name else None
+    )
+    if legacy_previous and _repo(target).read_yaml(legacy_previous) is not None:
+        changes[legacy_previous] = None
     actor = get_current_actor(request)
     try:
         result = _repo(target).write_pr(changes, f"Update permission template {name}",
@@ -172,19 +218,14 @@ def list_managed_tenants(target_id: str, db: Session = Depends(get_db), ctx: Acc
     target = _get_target(target_id, db, ctx)
     repo = _repo(target)
     results = []
-    for path in repo.list_paths("instances/"):
-        if not path.endswith("/metadata.yaml"):
-            continue
-        parts = path.split("/")
-        if len(parts) != 5:
-            continue
-        instance = db.query(models.NetboxInstance).filter(models.NetboxInstance.name == parts[1]).one_or_none()
+    for path, instance_name, tenant_key in _managed_metadata_paths(repo):
+        instance = db.query(models.NetboxInstance).filter(models.NetboxInstance.name == instance_name).one_or_none()
         if not instance or not filter_scoped([instance], "instance", ctx, db):
             continue
         metadata = repo.read_yaml(path) or {}
         results.append({"instance_id": instance.id, "instance": instance.name,
-                        "tenant_id": metadata.get("tenant_id", int(parts[3]) if parts[3].isdigit() else None),
-                        "tenant_name": metadata.get("tenant_name", parts[3]), "metadata": metadata})
+                        "tenant_id": metadata.get("tenant_id", int(tenant_key) if tenant_key.isdigit() else None),
+                        "tenant_name": metadata.get("tenant_name", tenant_key), "metadata": metadata})
     return results
 
 
@@ -207,7 +248,7 @@ def onboard(target_id: str, payload: OnboardPayload, request: Request, db: Sessi
     _require_instance_admin(instance, ctx, db)
     manager = _manager(instance, _repo(target), _actor_label(request))
     actor = get_current_actor(request)
-    path = f"instances/{instance.name}/tenants/{payload.tenant_id}"
+    path = tenant_state_base(instance.name, payload.tenant_id)
     try:
         result = manager.onboard(payload.tenant_id, payload.oidc_group_ro, payload.oidc_group_rw,
                                  payload.rw_template, payload.ro_template)
@@ -223,16 +264,13 @@ def onboard(target_id: str, payload: OnboardPayload, request: Request, db: Sessi
 def _selected_for_template(repo, template: str, db: Session, ctx: AccessContext):
     validate_template_name(template)
     selected = []
-    for path in repo.list_paths("instances/"):
-        if not path.endswith("/metadata.yaml"):
-            continue
+    for path, instance_name, _ in _managed_metadata_paths(repo):
         meta = repo.read_yaml(path) or {}
         refs = {meta.get("rw_template", {}).get("name"), meta.get("ro_template", {}).get("name"),
                 meta.get("ro_template", {}).get("derived_from")}
         if template not in refs:
             continue
-        parts = path.split("/")
-        instance = db.query(models.NetboxInstance).filter(models.NetboxInstance.name == parts[1]).one_or_none()
+        instance = db.query(models.NetboxInstance).filter(models.NetboxInstance.name == instance_name).one_or_none()
         if instance and filter_scoped([instance], "instance", ctx, db):
             selected.append((instance, meta, path))
     return selected
@@ -300,7 +338,7 @@ def decommission(target_id: str, payload: DecommissionPayload, request: Request,
     _require_instance_admin(instance, ctx, db)
     manager = _manager(instance, _repo(target), _actor_label(request))
     actor = get_current_actor(request)
-    path = f"instances/{instance.name}/tenants/{payload.tenant_id}"
+    path = tenant_state_base(instance.name, payload.tenant_id)
     try:
         result = manager.decommission(payload.tenant_id, payload.force)
         cleanup = result.get("permission_cleanup", {})

@@ -11,7 +11,7 @@ import pytest
 # global engine to /app/data during a test run.
 _DATABASE_DIR = Path(tempfile.mkdtemp(prefix="netbox-manager-tests-"))
 _DATABASE_PATH = _DATABASE_DIR / "netbox_manager.db"
-os.environ["NBM_DATABASE_PATH"] = str(_DATABASE_PATH)
+os.environ["NBM_TEST_DATABASE_PATH"] = str(_DATABASE_PATH)
 _EXPORT_DIR = _DATABASE_DIR / "exports"
 os.environ["NBM_EXPORT_DIR"] = str(_EXPORT_DIR)
 

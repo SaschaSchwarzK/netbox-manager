@@ -3,14 +3,35 @@ const inFlightGets = new Map<string, Promise<unknown>>();
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: unknown, public rawBody: string) {
-    const message = typeof detail === "string"
-      ? detail
-      : (detail && typeof detail === "object" && "message" in detail && typeof detail.message === "string")
-        ? detail.message
-        : status === 403 ? "You don't have permission to perform this action." : `Request failed (${status}).`;
+    let message: string;
+    if (typeof detail === "string" && detail.trim()) {
+      message = detail;
+    } else if (detail && typeof detail === "object" && "message" in detail && typeof detail.message === "string") {
+      message = detail.message;
+      if ("errors" in detail && Array.isArray(detail.errors) && detail.errors.length) {
+        message += ` ${detail.errors.join(" ")}`;
+      }
+      if ("request_id" in detail && typeof detail.request_id === "string" && detail.request_id !== "-") {
+        message += ` Request ID: ${detail.request_id}`;
+      }
+    } else if (status === 403) {
+      message = "You don't have permission to perform this action.";
+    } else if (rawBody.trim() && rawBody.trim() !== "Internal Server Error") {
+      message = rawBody.trim().slice(0, 500);
+    } else {
+      message = `The server could not complete this request (HTTP ${status}). Check the application logs.`;
+    }
     super(message);
     this.name = "ApiError";
   }
+}
+
+async function apiError(resp: Response): Promise<ApiError> {
+  const body = await resp.text();
+  let detail: unknown;
+  try { detail = JSON.parse(body).detail; } catch { detail = undefined; }
+  if (resp.status === 401) window.dispatchEvent(new Event("nbm:unauthorized"));
+  return new ApiError(resp.status, detail, body);
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -21,11 +42,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       ...options,
     });
     if (!resp.ok) {
-      const body = await resp.text();
-      let detail: unknown;
-      try { detail = JSON.parse(body).detail; } catch { detail = undefined; }
-      if (resp.status === 401) window.dispatchEvent(new Event("nbm:unauthorized"));
-      throw new ApiError(resp.status, detail, body);
+      throw await apiError(resp);
     }
     if (resp.status === 204) return undefined as T;
     return resp.json();
@@ -42,11 +59,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 async function requestText(path: string): Promise<string> {
   const resp = await fetch(`${BASE}${path}`);
   if (!resp.ok) {
-    const body = await resp.text();
-    let detail: unknown;
-    try { detail = JSON.parse(body).detail; } catch { detail = undefined; }
-    if (resp.status === 401) window.dispatchEvent(new Event("nbm:unauthorized"));
-    throw new ApiError(resp.status, detail, body);
+    throw await apiError(resp);
   }
   return resp.text();
 }
@@ -68,6 +81,7 @@ export interface AuthMeResponse {
   user: AuthUser | null;
   role: "viewer" | "editor" | "admin";
   app_admin: boolean;
+  configuration_errors?: string[];
 }
 
 export const authApi = {
@@ -268,6 +282,38 @@ export const tenantPermissionsApi = {
     `/repos/${targetId}/tenant-permissions/decommission`, {
       method: "POST", body: JSON.stringify({ instance_id: instanceId, tenant_id: tenantId, force }),
     }
+  ),
+};
+
+export interface ManagedOwnerPermissions {
+  instance_id: string;
+  instance: string;
+  metadata: Record<string, any>;
+}
+
+export const ownerPermissionsApi = {
+  templates: (targetId: string) => request<PermissionTemplateSummary[]>(`/repos/${targetId}/owner-permissions/templates`),
+  template: (targetId: string, name: string) => request<{ path: string; payload: Record<string, any> }>(
+    `/repos/${targetId}/owner-permissions/templates/${encodeURIComponent(name)}`
+  ),
+  validate: (targetId: string, payload: Record<string, any>) => request<{ valid: boolean; normalized: Record<string, any> }>(
+    `/repos/${targetId}/owner-permissions/validate`, { method: "POST", body: JSON.stringify({ payload }) }
+  ),
+  saveTemplate: (targetId: string, payload: Record<string, any>, previousName?: string) => request<any>(
+    `/repos/${targetId}/owner-permissions/templates`, { method: "PUT", body: JSON.stringify({ payload, previous_name: previousName || null }) }
+  ),
+  managed: (targetId: string) => request<ManagedOwnerPermissions[]>(`/repos/${targetId}/owner-permissions/managed`),
+  reconcile: (targetId: string, data: Record<string, any>) => request<any>(
+    `/repos/${targetId}/owner-permissions/reconcile`, { method: "POST", body: JSON.stringify(data) }
+  ),
+  apply: (targetId: string, template: string) => request<any>(
+    `/repos/${targetId}/owner-permissions/apply`, { method: "POST", body: JSON.stringify({ template }) }
+  ),
+  planApply: (targetId: string, template: string) => request<any>(
+    `/repos/${targetId}/owner-permissions/apply/plan`, { method: "POST", body: JSON.stringify({ template }) }
+  ),
+  decommission: (targetId: string, instanceId: string, force = false) => request<any>(
+    `/repos/${targetId}/owner-permissions/decommission`, { method: "POST", body: JSON.stringify({ instance_id: instanceId, force }) }
   ),
 };
 
@@ -709,7 +755,7 @@ export interface AuditLogEntry {
   created_at: string;
   action_type: string; // "github" or "netbox"
   target_name: string;
-  repo_target_id: string;
+  repo_target_id?: string | null;
   repo_target_name: string;
   file_path: string;
   status: string;
@@ -717,6 +763,10 @@ export interface AuditLogEntry {
   actor_sub?: string | null;
   actor_name?: string | null;
   actor_email?: string | null;
+  resource_type?: string | null;
+  resource_id?: string | null;
+  feature: string;
+  activity: string;
 }
 
 export const auditApi = {
@@ -1009,6 +1059,8 @@ export const migrationsApi = {
     request<MigrationJobSummary>("/migrations/plan", { method: "POST", body: JSON.stringify(data) }),
   jobs: () => request<MigrationJobSummary[]>("/migrations/jobs"),
   job: (id: string) => request<MigrationJobSummary>(`/migrations/jobs/${id}`),
+  removeJob: (id: string) => request<{ deleted: number }>(`/migrations/jobs/${id}`, { method: "DELETE" }),
+  clearHistory: () => request<{ deleted: number }>("/migrations/history", { method: "DELETE" }),
   mappingSkeleton: (id: string) => request<MigrationMappingSkeletonRow[]>(`/migrations/jobs/${id}/mapping-skeleton`),
   targetOptions: (id: string, objectType: string, query = "") => request<MigrationTargetOption[]>(
     `/migrations/jobs/${id}/target-options?object_type=${encodeURIComponent(objectType)}${query ? `&q=${encodeURIComponent(query)}` : ""}`,

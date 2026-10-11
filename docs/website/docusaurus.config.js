@@ -46,6 +46,10 @@ const config = {
       title: 'NetBox Manager',
       items: [
         { to: '/', label: 'Home', position: 'left' },
+        { to: '/docs/quick-start', label: 'Quick start', position: 'left' },
+        { to: '/docs/oidc-sso', label: 'SSO / OIDC', position: 'left' },
+        { to: '/docs/owner-permissions', label: 'Owner permissions', position: 'left' },
+        { to: '/docs/tenant-permissions', label: 'Tenant permissions', position: 'left' },
         { to: '/docs/user-guide', label: 'User guide', position: 'left' },
         { href: repoUrl, label: 'GitHub', position: 'right' },
       ],

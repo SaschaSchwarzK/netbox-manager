@@ -4,6 +4,7 @@ import {
   MigrationMappingSkeletonRow, MigrationTargetOption, MigrationTenant, MigrationType, NetboxInstance, MigrationPreflightResult,
 } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
+import { useAccess } from "../contexts/AccessContext";
 
 type ConflictPolicy = "skip" | "update" | "update_empty_only";
 
@@ -15,6 +16,7 @@ const TERMINAL: MigrationJobSummary["status"][] = [
   "completed", "completed_with_errors", "failed", "cancelled", "rolled_back", "rolled_back_with_errors",
 ];
 const ROLLBACK_ELIGIBLE: MigrationJobSummary["status"][] = ["completed", "completed_with_errors", "failed", "cancelled"];
+const DELETABLE: MigrationJobSummary["status"][] = ["planned", ...TERMINAL];
 
 function totalsFor(job: MigrationJobSummary, action: string): number {
   return Object.values(job.totals).reduce((sum, row) => sum + (row[action] ?? 0), 0);
@@ -96,6 +98,7 @@ function migrationTypeSection(type: string): string {
 }
 
 export default function MigrationPage() {
+  const access = useAccess();
   const [tab, setTab] = useState<"new" | "history">("new");
   const [instances, setInstances] = useState<NetboxInstance[]>([]);
   const [types, setTypes] = useState<MigrationType[]>([]);
@@ -330,8 +333,8 @@ export default function MigrationPage() {
 
   const rollbackMigration = async () => {
     if (!job || !confirm(
-      "Delete every object successfully created by this migration?\n\n" +
-      "This is best-effort only. Mapped and updated objects will NOT be restored or changed, patches on surviving objects will remain, and the marker tag definitions will be retained."
+      "Rollback this migration?\n\n" +
+      "Objects created by the migration will be deleted and updated objects with a recorded pre-change snapshot will be restored. Mapped objects are not changed. Older migrations without snapshots cannot restore updates."
     )) return;
     setBusy(true); setNotice(null);
     try {
@@ -339,8 +342,42 @@ export default function MigrationPage() {
       setJob(result.job); setReportNonce((n) => n + 1);
       setNotice({
         kind: result.failed ? "warning" : "ok",
-        text: `${result.detail} Deleted ${result.deleted}; failed ${result.failed}; untouched mapped ${result.untouched_mapped}; untouched updated ${result.untouched_updated}.`,
+        text: `${result.detail} Rollback started. Updates without snapshots: ${result.untouched_updated}.`,
       });
+    } catch (e) { setNotice({ kind: "error", text: message(e) }); }
+    finally { setBusy(false); }
+  };
+
+  const openHistoryJob = (selected: MigrationJobSummary) => {
+    setJob(selected);
+    setSourceId(selected.source_instance_id);
+    setTargetId(selected.target_instance_id);
+    setTenantFilter(selected.tenant_filter);
+    setSelectedTypes(new Set(selected.selected_types));
+    setNotice(null);
+    setTab("new");
+  };
+
+  const deleteHistoryJob = async (selected: MigrationJobSummary) => {
+    if (!confirm("Delete this migration history entry and its report? This cannot be undone and does not change any objects in NetBox.")) return;
+    setBusy(true); setNotice(null);
+    try {
+      await migrationsApi.removeJob(selected.id);
+      if (job?.id === selected.id) resetWizard();
+      await loadJobs();
+      setNotice({ kind: "ok", text: "Migration history entry and report deleted." });
+    } catch (e) { setNotice({ kind: "error", text: message(e) }); }
+    finally { setBusy(false); }
+  };
+
+  const clearHistory = async () => {
+    if (!confirm("Delete all inactive migration history and reports? Active migrations are preserved. This cannot be undone and does not change any objects in NetBox.")) return;
+    setBusy(true); setNotice(null);
+    try {
+      const result = await migrationsApi.clearHistory();
+      if (job && DELETABLE.includes(job.status)) resetWizard();
+      await loadJobs();
+      setNotice({ kind: "ok", text: `Deleted ${result.deleted} migration history entr${result.deleted === 1 ? "y" : "ies"}.` });
     } catch (e) { setNotice({ kind: "error", text: message(e) }); }
     finally { setBusy(false); }
   };
@@ -385,7 +422,7 @@ export default function MigrationPage() {
       <strong>Development software — use at your own risk.</strong>
       <p>
         NetBox Manager is still under active development, and data migration is still under testing.
-        Migration writes directly to the target and rollback cannot restore updated objects.
+        Migration writes directly to the target. Rollback is best-effort and can restore updates only when a pre-change snapshot was recorded.
       </p>
       <p>
         Before continuing, create and verify current backups of the source and target NetBox instances,
@@ -405,6 +442,11 @@ export default function MigrationPage() {
     )}
 
     {tab === "history" && <div className="card">
+      {access.appAdmin && <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+        <button className="danger" disabled={busy || !jobs.some((j) => DELETABLE.includes(j.status))} onClick={clearHistory}>
+          Clear inactive history
+        </button>
+      </div>}
       <table>
         <thead><tr><th>Source</th><th>Target</th><th>Status</th><th>Created</th><th>Actor</th><th></th></tr></thead>
         <tbody>
@@ -416,7 +458,9 @@ export default function MigrationPage() {
               <td>{new Date(j.created_at).toLocaleString()}</td>
               <td>{j.actor_name ?? "—"}</td>
               <td className="list-table-actions">
+                <button onClick={() => openHistoryJob(j)}>Open</button>
                 <button onClick={() => window.open(migrationsApi.reportUrl(j.id), "_blank")}>View report</button>
+                {access.can("editor") && DELETABLE.includes(j.status) && <button className="danger" disabled={busy} onClick={() => deleteHistoryJob(j)}>Delete</button>}
               </td>
             </tr>
           ))}

@@ -1,9 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import CustomFieldsPage from "./CustomFieldsPage";
 
 const mocks = vi.hoisted(() => ({
-  targets: vi.fn(), instances: vi.fn(), get: vi.fn(),
+  targets: vi.fn(), instances: vi.fn(), get: vi.fn(), save: vi.fn(),
 }));
 
 vi.mock("../api/client", async () => {
@@ -12,7 +12,7 @@ vi.mock("../api/client", async () => {
     ...actual,
     githubApi: { list: mocks.targets },
     instancesApi: { list: mocks.instances },
-    customFieldsApi: { get: mocks.get },
+    customFieldsApi: { get: mocks.get, save: mocks.save },
   };
 });
 
@@ -28,6 +28,7 @@ beforeEach(() => {
     format_supported: false,
     unsupported_reason: "content_types is unsupported; use object_types (NetBox >= 4.6.8).",
   });
+  mocks.save.mockResolvedValue({ pr_number: 42, pr_url: "https://github.example/pull/42" });
 });
 
 test("shows an unsupported-format state for a legacy repository template", async () => {
@@ -36,5 +37,21 @@ test("shows an unsupported-format state for a legacy repository template", async
   expect(await screen.findByRole("heading", { name: "Unsupported custom-fields template" })).toBeTruthy();
   expect(screen.getByText(/content_types is unsupported; use object_types/)).toBeTruthy();
   expect(screen.getByText(/file was not modified/)).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Add field" })).toBeNull();
+  expect(screen.getByRole("button", { name: "+ Add Custom Field" })).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", { name: "Saved" })).toHaveProperty("disabled", true);
+  fireEvent.click(screen.getByRole("button", { name: "Import / Push / Drift" }));
+  expect(screen.getByRole("heading", { name: "Restore custom-field values" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Scan for differences" })).toHaveProperty("disabled", true);
+});
+
+test("offers to migrate legacy content_types in a pull request", async () => {
+  render(<CustomFieldsPage />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Fix template and open pull request" }));
+
+  await vi.waitFor(() => expect(mocks.save).toHaveBeenCalledOnce());
+  const request = mocks.save.mock.calls[0][1];
+  expect(request.payload.custom_fields[0].content_types).toBeUndefined();
+  expect(request.payload.custom_fields[0].object_types).toEqual(["dcim.device"]);
+  expect(await screen.findByText(/Correction proposed in/)).toBeTruthy();
 });

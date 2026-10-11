@@ -23,11 +23,22 @@ describe("API client errors and GET de-duplication", () => {
     window.removeEventListener("nbm:unauthorized", listener);
   });
 
-  it("uses a friendly 403 message and tolerates non-JSON bodies", async () => {
+  it("uses friendly status and upstream text messages", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response("forbidden", 403)));
     await expect(instancesApi.list()).rejects.toThrow("You don't have permission to perform this action.");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response("upstream exploded", 502)));
-    await expect(instancesApi.list()).rejects.toThrow("Request failed (502).");
+    await expect(instancesApi.list()).rejects.toThrow("upstream exploded");
+  });
+
+  it("renders structured server errors with remediation and request ID", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(JSON.stringify({ detail: {
+      code: "credential_decryption_failed",
+      message: "Restore the original encryption key.",
+      request_id: "request-123",
+    } }), 503)));
+    await expect(instancesApi.list()).rejects.toThrow(
+      "Restore the original encryption key. Request ID: request-123"
+    );
   });
 
   it("shares one in-flight request between identical GETs", async () => {

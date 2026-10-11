@@ -15,7 +15,7 @@ Optional environment overrides:
   CERT_VOLUME     Persistent certificate volume (default: netbox-manager_certdata)
   EXPORT_VOLUME   Persistent Data Export volume (default: netbox-manager_exportdata)
   HOST_PORT       Host HTTPS port              (default: 8443)
-  ENV_FILE        Application environment file (default: ./.env, then backend/.env)
+  ENV_FILE        Application environment file (default: ./.env)
   MEMORY_LIMIT    Container memory limit       (default: 256m)
   CPU_LIMIT       Container CPU limit          (default: 1.0)
   PIDS_LIMIT      Container process limit      (default: 128)
@@ -53,13 +53,7 @@ data_volume=${DATA_VOLUME:-netbox-manager_dbdata}
 cert_volume=${CERT_VOLUME:-netbox-manager_certdata}
 export_volume=${EXPORT_VOLUME:-netbox-manager_exportdata}
 host_port=${HOST_PORT:-8443}
-if [ -n "${ENV_FILE:-}" ]; then
-    env_file=$ENV_FILE
-elif [ -f "$script_dir/.env" ]; then
-    env_file=$script_dir/.env
-else
-    env_file=$script_dir/backend/.env
-fi
+env_file=${ENV_FILE:-$script_dir/.env}
 memory_limit=${MEMORY_LIMIT:-256m}
 cpu_limit=${CPU_LIMIT:-1.0}
 pids_limit=${PIDS_LIMIT:-128}
@@ -76,7 +70,7 @@ docker info >/dev/null 2>&1 || {
 
 if [ ! -f "$env_file" ]; then
     echo "Environment file not found: $env_file" >&2
-    echo "Create it from backend/.env.example and set NBM_SECRET_KEY." >&2
+    echo "Create it from .env.example and set NBM_SECRET_KEY." >&2
     exit 1
 fi
 

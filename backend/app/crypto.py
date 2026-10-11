@@ -7,19 +7,21 @@ try:
     if not _fernets:
         raise ValueError("no keys configured")
     _fernet = MultiFernet(_fernets)
-except Exception as exc:
-    raise RuntimeError(
-        "NBM_SECRET_KEY is not set to a valid Fernet key (this happens if backend/.env "
-        "was never created from backend/.env.example, or still has the placeholder value). "
-        "Generate one with:\n"
-        '  python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"\n'
-        "and set NBM_SECRET_KEY to the result in backend/.env, then restart."
-    ) from exc
+except Exception:
+    # Keep the API process alive in a fail-closed configuration-error state.
+    # encrypt()/decrypt() below remain unavailable until the key is corrected.
+    _fernet = None
+
+
+def _require_fernet() -> MultiFernet:
+    if _fernet is None:
+        raise RuntimeError("Credential encryption is unavailable because NBM_SECRET_KEY is not a valid Fernet key.")
+    return _fernet
 
 
 def encrypt(value: str) -> str:
-    return _fernet.encrypt(value.encode()).decode()
+    return _require_fernet().encrypt(value.encode()).decode()
 
 
 def decrypt(value: str) -> str:
-    return _fernet.decrypt(value.encode()).decode()
+    return _require_fernet().decrypt(value.encode()).decode()

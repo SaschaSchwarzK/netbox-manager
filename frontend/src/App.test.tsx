@@ -23,6 +23,18 @@ describe("App", () => {
     expect(await screen.findByText("Sign in with SSO")).toBeTruthy();
   });
 
+  it("shows actionable configuration errors without login controls", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => json({
+      auth_enabled: true, oidc_enabled: false, local_login_enabled: false,
+      authenticated: false, user: null, role: "viewer", app_admin: false,
+      configuration_errors: ["NBM_SECRET_KEY must contain a valid Fernet key."],
+    })));
+    render(<App />);
+    expect(await screen.findByText("Configuration error")).toBeTruthy();
+    expect(screen.getByText(/NBM_SECRET_KEY/)).toBeTruthy();
+    expect(screen.queryByText("Sign in with SSO")).toBeNull();
+  });
+
   it("resolves an authenticated lazy route", async () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

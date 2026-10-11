@@ -6,7 +6,8 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Response
+from cryptography.fernet import InvalidToken
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -15,7 +16,7 @@ from sqlalchemy import text
 
 from app import models
 from app.auth import get_current_user_optional
-from app.config import settings, validate_startup_security
+from app.config import settings, startup_configuration_errors
 from app.database import SessionLocal, optimize_database, run_schema_migrations
 from app.rbac import AccessContext, require_app_admin
 from app import stats
@@ -23,7 +24,7 @@ from app.observability import (
     get_request_stats, install_db_instrumentation, reset_request_stats, start_request_stats,
 )
 from app.database import engine
-from app.routers import auth, device_types, drift, exports, fleet, github, instances, migrations, module_types, rack_types, reference_data, search, tenant_permissions
+from app.routers import auth, device_types, drift, exports, fleet, github, instances, migrations, module_types, owner_permissions, rack_types, reference_data, search, tenant_permissions
 from app.routers import audit as audit_router
 from app.routers import custom_fields
 from app.routers import syslog as syslog_router
@@ -60,34 +61,13 @@ def configure_logging() -> None:
 configure_logging()
 install_db_instrumentation(engine)
 
-validate_startup_security()
+_configuration_errors = startup_configuration_errors()
+for _configuration_error in _configuration_errors:
+    logger.error("Configuration error: %s", _configuration_error)
 
-_local_user_set = bool(settings.local_admin_user.strip())
-_local_password_set = bool(settings.local_admin_password.strip())
-_oidc_values = (
-    settings.oidc_issuer.strip(),
-    settings.oidc_client_id.strip(),
-    settings.oidc_client_secret.strip(),
-)
 if settings.authentication_disabled:
     logger.warning(
         "Authentication and authorization are disabled by AUTHENTICATION_DISABLED=True."
-    )
-elif any(_oidc_values) and not settings.oidc_enabled:
-    raise RuntimeError(
-        "OIDC configuration is incomplete. Set NBM_OIDC_ISSUER, NBM_OIDC_CLIENT_ID, "
-        "and NBM_OIDC_CLIENT_SECRET, or remove all three values."
-    )
-elif _local_user_set != _local_password_set:
-    raise RuntimeError(
-        "Local admin configuration is incomplete. Set both NBM_LOCAL_ADMIN_USER and "
-        "NBM_LOCAL_ADMIN_PASSWORD, or remove both values."
-    )
-elif not settings.oidc_enabled and not settings.local_admin_enabled:
-    raise RuntimeError(
-        "Authentication is enforced, but no complete authentication method is configured. "
-        "Configure OIDC, configure the local administrator, or explicitly set "
-        "AUTHENTICATION_DISABLED=True."
     )
 
 if not settings.authentication_disabled and settings.local_admin_enabled:
@@ -121,6 +101,36 @@ app = FastAPI(
     openapi_url="/openapi.json" if settings.enable_api_docs else None,
 )
 
+
+def _error_response(status: int, code: str, message: str) -> JSONResponse:
+    request_id = request_id_context.get()
+    return JSONResponse(
+        {"detail": {"code": code, "message": message, "request_id": request_id}},
+        status_code=status,
+    )
+
+
+@app.exception_handler(InvalidToken)
+async def encrypted_credential_error(request: Request, exc: InvalidToken):
+    logger.error("Stored credential decryption failed for %s", request.url.path, exc_info=exc)
+    return _error_response(
+        503,
+        "credential_decryption_failed",
+        "A stored credential cannot be decrypted with the configured NBM_SECRET_KEY. "
+        "Restore the key that encrypted the existing database, or re-enter the affected "
+        "NetBox API token or GitHub PAT using an administrator account.",
+    )
+
+
+@app.exception_handler(Exception)
+async def unexpected_api_error(request: Request, exc: Exception):
+    logger.exception("Unhandled request error for %s", request.url.path, exc_info=exc)
+    return _error_response(
+        500,
+        "internal_error",
+        "The server could not complete this request. Check the application logs using the supplied request ID.",
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -141,10 +151,15 @@ _PUBLIC_API_PREFIXES = ("/api/auth", "/api/health")
 class AuthRequiredMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         path = request.url.path
+        if _configuration_errors and path.startswith("/api/") and path not in {"/api/health", "/api/health/ready", "/api/auth/me"}:
+            return JSONResponse(
+                {"detail": {"code": "configuration_error", "message": "Application configuration is invalid.", "errors": _configuration_errors}},
+                status_code=503,
+            )
         if (
             not settings.authentication_disabled
             and request.method != "OPTIONS"  # never block CORS preflight; it carries no cookies anyway
-            and (path.startswith("/api/") or path in {"/docs", "/redoc", "/openapi.json"})
+            and (path.startswith("/api/") or (settings.enable_api_docs and path in {"/docs", "/redoc", "/openapi.json"}))
             and not any(path.startswith(p) for p in _PUBLIC_API_PREFIXES)
         ):
             if get_current_user_optional(request) is None:
@@ -157,27 +172,24 @@ app.add_middleware(AuthRequiredMiddleware)
 
 class MutationAuditMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
+        # Capture the actor before the endpoint runs.  Logout deletes the
+        # session, so resolving identity only after call_next() loses exactly
+        # the user we need to attribute that action to.
+        actor = get_current_user_optional(request) or {}
         response = await call_next(request)
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path.startswith("/api/"):
-            parts = [part for part in request.url.path.split("/") if part]
-            category = parts[1] if len(parts) > 1 else "api"
-            resource_type = {
-                "instances": "instance", "github-targets": "github_target",
-                "migrations": "migration", "access-mappings": "access_mapping",
-                "auth": "authentication", "drift": "drift",
-                "exports": "export",
-            }.get(category, category)
-            resource_id = next((part for part in parts[2:] if part not in {
-                "test", "plan", "execute", "cancel", "retry-failed", "rollback", "push", "check",
-            }), None)
-            user = get_current_user_optional(request) or {}
+        audit = getattr(request.state, "nbm_audit_event", None)
+        if audit:
+            # Authentication endpoints can supply the newly authenticated
+            # identity (or the attempted local username) after processing.
+            actor = getattr(request.state, "nbm_audit_actor", actor)
             db = SessionLocal()
             try:
                 db.add(models.AuditEvent(
-                    actor_sub=user.get("sub"), actor_name=user.get("name"), actor_email=user.get("email"),
-                    action=f"{request.method.lower()}_{category}", resource_type=resource_type,
-                    resource_id=resource_id, status="success" if response.status_code < 400 else "error",
-                    detail=f"HTTP {response.status_code}",
+                    actor_sub=actor.get("sub"), actor_name=actor.get("name"), actor_email=actor.get("email"),
+                    action=audit["action"], resource_type=audit["resource_type"],
+                    resource_id=audit.get("resource_id"),
+                    status="success" if response.status_code < 400 else "error",
+                    detail=audit["detail"],
                 ))
                 db.commit()
             except Exception:
@@ -259,6 +271,7 @@ app.include_router(reference_data.router)
 app.include_router(syslog_router.router)
 app.include_router(access_router.router)
 app.include_router(tenant_permissions.router)
+app.include_router(owner_permissions.router)
 app.include_router(migrations.router)
 app.include_router(exports.router)
 
@@ -363,7 +376,7 @@ def resume_orphaned_migration_jobs():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "degraded" if _configuration_errors else "ok", "configuration_errors": _configuration_errors}
 
 
 @app.get("/api/health/ready")
@@ -372,6 +385,8 @@ def readiness(response: Response):
     try:
         db.execute(text("BEGIN IMMEDIATE"))
         db.rollback()
+        if _configuration_errors:
+            raise RuntimeError("configuration invalid")
         if settings.drift_check_interval_hours > 0 and not getattr(app.state, "scheduler", None):
             raise RuntimeError("scheduler unavailable")
         return {"status": "ok"}
