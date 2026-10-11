@@ -22,6 +22,7 @@ const SyslogPage = lazy(() => import("./pages/SyslogPage"));
 const FleetPage = lazy(() => import("./pages/FleetPage"));
 const AccessControlPage = lazy(() => import("./pages/AccessControlPage"));
 const TenantPermissionsPage = lazy(() => import("./pages/TenantPermissionsPage"));
+const OwnerPermissionsPage = lazy(() => import("./pages/OwnerPermissionsPage"));
 const MigrationPage = lazy(() => import("./pages/MigrationPage"));
 const ExportPage = lazy(() => import("./pages/ExportPage"));
 
@@ -89,6 +90,9 @@ export default function App() {
             <NavLink to="/tenant-permissions" className={({ isActive }) => (isActive ? "active" : "")}>
               Tenant Permissions
             </NavLink>
+            <NavLink to="/owner-permissions" className={({ isActive }) => (isActive ? "active" : "")}>
+              Owner Permissions
+            </NavLink>
             <NavLink to="/bulk-import" className={({ isActive }) => (isActive ? "active" : "")}>
               Bulk Import
             </NavLink>
@@ -147,6 +151,7 @@ export default function App() {
             <Route path="/custom-fields" element={<CustomFieldsPage />} />
             <Route path="/reference-data" element={<ReferenceDataPage />} />
             <Route path="/tenant-permissions" element={<TenantPermissionsPage />} />
+            <Route path="/owner-permissions" element={<OwnerPermissionsPage />} />
             <Route path="/bulk-import" element={<BulkImportPage />} />
             <Route path="/migration" element={<MigrationPage />} />
             <Route path="/export" element={<ExportPage />} />

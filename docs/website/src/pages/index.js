@@ -6,11 +6,11 @@ import styles from './index.module.css';
 const repositoryUrl = 'https://github.com/SaschaSchwarzK/netbox-manager';
 
 const capabilities = [
-  { title: 'Configuration as code', description: 'Manage device types, custom fields, reference data, and tenant permissions as reviewable YAML in GitHub.' },
+  { title: 'Configuration as code', description: 'Manage device types, custom fields, reference data, and owner-based permissions as reviewable YAML in GitHub.' },
   { title: 'Safe fleet publishing', description: 'Preview differences, open pull requests, enforce approval gates, publish to selected NetBox instances, and detect drift.' },
   { title: 'Search and fleet insight', description: 'Search infrastructure across instances and inspect health, versions, plugins, response times, and device-type coverage.' },
   { title: 'Migration and export', description: 'Plan tenant-scoped migrations with mapping review and export inventory to CSV or Excel using standard and custom fields.' },
-  { title: 'Access automation', description: 'Apply Git-backed tenant permission templates while scoping user roles to the instances and repositories they need.' },
+  { title: 'Access automation', description: 'Apply reusable owner-based permission templates, with tenant permissions retained for compatibility.' },
   { title: 'Auditability', description: 'Keep an audit trail, attribute pull requests to their requesters, and optionally forward audit events to syslog.' },
 ];
 
@@ -24,11 +24,31 @@ export default function Home() {
             <h1>Manage shared NetBox configuration with Git-backed review.</h1>
             <p className={styles.intro}>NetBox Manager helps teams create, review, publish, search, migrate, and export data across multiple NetBox instances—without giving up GitHub as the source of truth.</p>
             <div className={styles.actions}>
-              <Link className="button button--primary button--lg" to="/docs/user-guide">Read the user guide</Link>
+              <Link className="button button--primary button--lg" to="/docs/quick-start">Get started</Link>
+              <Link className="button button--secondary button--lg" to="/docs/user-guide">Read the user guide</Link>
               <Link className="button button--secondary button--lg" href={repositoryUrl}>View on GitHub</Link>
             </div>
           </div>
         </header>
+
+        <section className={styles.videoSection} aria-labelledby="overview-video-heading">
+          <div className="container">
+            <div className={styles.videoHeading}>
+              <p className={styles.eyebrow}>Video overview</p>
+              <h2 id="overview-video-heading">See NetBox Manager in action</h2>
+            </div>
+            <div className={styles.videoFrame}>
+              <iframe
+                src="https://www.youtube-nocookie.com/embed/u8fagFsuHY4"
+                title="NetBox Manager video overview"
+                loading="lazy"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allowFullScreen
+              />
+            </div>
+          </div>
+        </section>
 
         <section className={styles.section}>
           <div className="container">

@@ -151,6 +151,10 @@ def create_export(payload: schemas.ExportCreateRequest, request: Request, db: Se
     db.add(job)
     db.commit()
     db.refresh(job)
+    request.state.nbm_audit_event = {
+        "action": "create_export", "resource_type": "export", "resource_id": job.id,
+        "detail": f"Started a {payload.format.upper()} export for tenant {tenant_name} from NetBox instance {instance.name}.",
+    }
     runner.submit_job(job.id)
     logger.info("Export job created: owner=%s job=%s instance=%s tenant=%s types=%s format=%s",
                 owner, job.id, instance.id, payload.tenant_id, payload.object_types, payload.format)

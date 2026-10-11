@@ -47,6 +47,24 @@ def test_reconcile_combines_matching_permissions_into_one_netbox_permission():
 
 
 @responses.activate
+def test_owner_reconcile_preserves_user_token_in_exact_netbox_payload():
+    base = "https://netbox.example/api"
+    responses.get(f"{base}/users/permissions/", json={"results": []})
+    responses.post(f"{base}/users/permissions/", json={"id": 3})
+    client = RequestsNetBox("https://netbox.example", "secret", True)
+
+    result = client.reconcile({"id": 7}, [{
+        "object_type": "dcim.interface", "actions": ["view", "change"],
+        "constraints": {"device__owner__users": "$user"},
+    }], "nbm:owner:prod:rw")
+
+    assert result == {"created": 1, "updated": 0, "deleted": 0}
+    body = responses.calls[1].request.body
+    assert b'"constraints": {"device__owner__users": "$user"}' in body
+    assert b'"groups": [7]' in body
+
+
+@responses.activate
 def test_delete_group_deletes_owned_exclusive_and_detaches_foreign_or_shared():
     base = "https://netbox.example/api"
     responses.get(f"{base}/users/permissions/", json={"results": [

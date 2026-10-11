@@ -239,7 +239,7 @@ def test_full_plan_execute_report_cycle_through_the_router(db, instances):
     assert item.execution_status == "pending"
 
     exec_summary = migrations.execute_migration(
-        job_id, schemas.MigrationExecuteRequest(confirm=True), db=db, ctx=_admin_ctx(),
+            job_id, schemas.MigrationExecuteRequest(confirm=True), request=_FakeRequest(), db=db, ctx=_admin_ctx(),
     )
     assert exec_summary.status == "running"
 
@@ -371,6 +371,57 @@ def test_rollback_requires_target_instance_admin(db, instances):
         )
 
     assert exc_info.value.status_code == 403
+
+
+def test_delete_migration_job_removes_report_rows_transactionally(db, instances):
+    source, target = instances
+    job = models.MigrationJob(source_instance_id=source.id, target_instance_id=target.id, status="completed")
+    db.add(job); db.flush()
+    db.add(models.MigrationJobItem(
+        job_id=job.id, order_index=0, object_type="dcim.site", source_id=1,
+        planned_action="create", execution_status="done",
+    ))
+    db.add(models.MigrationJobPatch(
+        job_id=job.id, order_index=0, object_type="dcim.device", source_id=2,
+        patch_fields_json="{}", polymorphic_patch_fields_json="{}", execution_status="done",
+    ))
+    db.commit()
+    job_id = job.id
+
+    result = migrations.delete_migration_job(job_id, db=db, ctx=_admin_ctx())
+
+    assert result == {"deleted": 1}
+    assert db.get(models.MigrationJob, job_id) is None
+    assert db.query(models.MigrationJobItem).filter_by(job_id=job_id).count() == 0
+    assert db.query(models.MigrationJobPatch).filter_by(job_id=job_id).count() == 0
+
+
+def test_delete_migration_job_rejects_active_job(db, instances):
+    source, target = instances
+    job = models.MigrationJob(source_instance_id=source.id, target_instance_id=target.id, status="running")
+    db.add(job); db.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        migrations.delete_migration_job(job.id, db=db, ctx=_admin_ctx())
+
+    assert exc_info.value.status_code == 409
+    assert db.get(models.MigrationJob, job.id) is not None
+
+
+def test_clear_history_preserves_active_jobs(db, instances):
+    source, target = instances
+    completed = models.MigrationJob(source_instance_id=source.id, target_instance_id=target.id, status="completed")
+    planned = models.MigrationJob(source_instance_id=source.id, target_instance_id=target.id, status="planned")
+    running = models.MigrationJob(source_instance_id=source.id, target_instance_id=target.id, status="running")
+    db.add_all([completed, planned, running]); db.commit()
+    completed_id, planned_id, running_id = completed.id, planned.id, running.id
+
+    result = migrations.clear_migration_history(db=db, _ctx=_admin_ctx())
+
+    assert result == {"deleted": 2}
+    assert db.get(models.MigrationJob, completed_id) is None
+    assert db.get(models.MigrationJob, planned_id) is None
+    assert db.get(models.MigrationJob, running_id) is not None
 
 
 class _FakeRequest:

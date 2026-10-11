@@ -1,3 +1,5 @@
+import os
+import sys
 from pathlib import Path
 
 from alembic import command
@@ -6,12 +8,15 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-from app.config import settings
-
 # check_same_thread=False is needed for SQLite since FastAPI may use the
 # connection from a different thread than the one that created it; SQLAlchemy's
 # session-per-request pattern still keeps access safe.
-DATABASE_URL = f"sqlite:///{settings.database_path}"
+DATABASE_PATH = Path("/app/data/netbox_manager.db")
+# Tests need isolation from the persistent production database. This override is
+# deliberately unavailable in normal application processes and is not a deployment setting.
+if "pytest" in sys.modules and (test_path := os.environ.get("NBM_TEST_DATABASE_PATH")):
+    DATABASE_PATH = Path(test_path)
+DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False, "timeout": 30},

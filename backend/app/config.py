@@ -1,5 +1,6 @@
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from cryptography.fernet import Fernet
 
 
 class Settings(BaseSettings):
@@ -31,7 +32,6 @@ class Settings(BaseSettings):
     session_touch_interval_seconds: int = 60
     archive_max_mib: int = 48
     archive_lock_timeout_seconds: float = 120
-    database_path: str = "/app/data/netbox_manager.db"
     export_dir: str = "/app/exports"
     export_retention_days: int = 7
     export_max_concurrent_jobs: int = 2
@@ -94,18 +94,54 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-def validate_startup_security(config: Settings = settings) -> None:
+def startup_configuration_errors(config: Settings = settings) -> list[str]:
+    """Return safe, actionable configuration errors without exposing secrets."""
+    errors: list[str] = []
     if config.session_idle_timeout_minutes * 60 <= config.session_touch_interval_seconds:
-        raise RuntimeError(
+        errors.append(
             "NBM_SESSION_IDLE_TIMEOUT_MINUTES must be greater than "
             "NBM_SESSION_TOUCH_INTERVAL_SECONDS."
         )
-    if config.authentication_disabled:
-        return
-    if (
+    if not config.authentication_disabled and (
         config.session_secret_key == "CHANGE_ME_GENERATE_A_RANDOM_SECRET"
         or len(config.session_secret_key) < 32
     ):
-        raise RuntimeError(
+        errors.append(
             "NBM_SESSION_SECRET_KEY must be changed from the placeholder and contain at least 32 characters."
         )
+    keys = [key.strip() for key in config.secret_key.split(",") if key.strip()]
+    try:
+        if not keys:
+            raise ValueError("no keys configured")
+        for key in keys:
+            Fernet(key.encode())
+    except (TypeError, ValueError):
+        errors.append(
+            "NBM_SECRET_KEY must contain one or more valid Fernet keys. Generate one with: "
+            'python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
+        )
+    if config.authentication_disabled:
+        return errors
+    oidc_values = (config.oidc_issuer.strip(), config.oidc_client_id.strip(), config.oidc_client_secret.strip())
+    if any(oidc_values) and not all(oidc_values):
+        errors.append(
+            "OIDC configuration is incomplete. Set NBM_OIDC_ISSUER, NBM_OIDC_CLIENT_ID, "
+            "and NBM_OIDC_CLIENT_SECRET, or remove all three values."
+        )
+    local_values = (config.local_admin_user.strip(), config.local_admin_password.strip())
+    if bool(local_values[0]) != bool(local_values[1]):
+        errors.append(
+            "Local admin configuration is incomplete. Set both NBM_LOCAL_ADMIN_USER and "
+            "NBM_LOCAL_ADMIN_PASSWORD, or remove both values."
+        )
+    if not all(oidc_values) and not all(local_values):
+        errors.append(
+            "Authentication is enforced, but no complete authentication method is configured."
+        )
+    return errors
+
+
+def validate_startup_security(config: Settings = settings) -> None:
+    errors = startup_configuration_errors(config)
+    if errors:
+        raise RuntimeError(errors[0])

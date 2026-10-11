@@ -317,6 +317,9 @@ class MigrationJobItem(Base):
     fk_refs_json: Mapped[str] = mapped_column(Text, default="{}")
     deferred_fk_json: Mapped[str] = mapped_column(Text, default="{}")
     dropped_custom_fields_json: Mapped[str] = mapped_column(Text, default="[]")  # list[str], for the report's warnings
+    # Exact target-side values for fields changed by an update. Persisted
+    # before the remote PATCH so rollback remains crash-safe.
+    previous_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # known immediately for map; filled in on create
     target_natural_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -348,6 +351,7 @@ class MigrationJobPatch(Base):
     # Polymorphic FK fields: {field_name: {"type": dep_type_key, "id": source_fk_id}}.
     # The type is determined at plan time from the discriminator field; resolution happens at patch time.
     polymorphic_patch_fields_json: Mapped[str] = mapped_column(Text, default="{}")
+    previous_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     execution_status: Mapped[str] = mapped_column(String(16), default="pending")
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)

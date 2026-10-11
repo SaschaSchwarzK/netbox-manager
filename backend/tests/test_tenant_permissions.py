@@ -111,7 +111,7 @@ class FakeNetBox:
 
 def manager(version=1, instance="prod", netbox=None, repo=None):
     tpl = template([{"object_type": "dcim.device", "tenant_relation": "tenant", "actions": ["change"]}], version)
-    repo = repo or FakeRepo({"templates/standard.yaml": tpl})
+    repo = repo or FakeRepo({"templates/tenant-permissions/standard.yaml": tpl})
     netbox = netbox or FakeNetBox()
     return TenantManager(netbox, repo, RELATIONS, BLOCKED, instance, "tester"), netbox, repo
 
@@ -129,9 +129,9 @@ def test_apply_template_fleet_selection_and_update_semantics():
     for instance in ("east", "west"):
         mgr, nb, repo = manager(version=1, instance=instance)
         mgr.onboard(42, f"{instance}-ro", f"{instance}-rw", "standard")
-        repo.files["templates/standard.yaml"]["version"] = 2
+        repo.files["templates/tenant-permissions/standard.yaml"]["version"] = 2
         mgr.onboard(42, f"{instance}-ro", f"{instance}-rw", "standard")
-        assert repo.files[f"instances/{instance}/tenants/42/metadata.yaml"]["rw_template"]["version"] == 2
+        assert repo.files[f"tenant-permissions/instances/{instance}/tenants/42/metadata.yaml"]["rw_template"]["version"] == 2
         netboxes.append(nb); repos.append(repo)
     assert all(len(repo.prs) == 2 for repo in repos)
 
@@ -171,3 +171,41 @@ def test_plan_does_not_mutate():
     assert result["stats"]["ro"]["created"] == 1
     assert nb.groups == {}
     assert repo.prs == []
+
+
+def test_legacy_template_path_remains_readable():
+    legacy = template([
+        {"object_type": "dcim.device", "tenant_relation": "tenant", "actions": ["view"]}
+    ])
+    mgr, _, _ = manager(repo=FakeRepo({"templates/standard.yaml": legacy}))
+    assert mgr.plan(42, "acme-ro", "acme-rw", "standard")["stats"]["ro"]["created"] == 1
+
+
+def test_reconcile_migrates_legacy_tracking_path():
+    mgr, nb, repo = manager()
+    mgr.onboard(42, "acme-ro", "acme-rw", "standard")
+    new_base = "tenant-permissions/instances/prod/tenants/42"
+    legacy_base = "instances/prod/tenants/42"
+    for suffix in ("metadata.yaml", "ro.resolved.yaml", "rw.resolved.yaml"):
+        repo.files[f"{legacy_base}/{suffix}"] = repo.files.pop(f"{new_base}/{suffix}")
+
+    result = mgr.onboard(42, "acme-ro", "acme-rw", "standard")
+
+    assert result["changed"] is True
+    assert f"{new_base}/metadata.yaml" in repo.files
+    assert not any(path.startswith(legacy_base + "/") for path in repo.files)
+
+
+def test_managed_path_discovery_prefers_new_path_and_reads_legacy():
+    from app.routers.tenant_permissions import _managed_metadata_paths
+
+    repo = FakeRepo({
+        "tenant-permissions/instances/prod/tenants/42/metadata.yaml": {"tenant_id": 42},
+        "instances/prod/tenants/42/metadata.yaml": {"tenant_id": 42},
+        "instances/prod/tenants/43/metadata.yaml": {"tenant_id": 43},
+    })
+
+    assert list(_managed_metadata_paths(repo)) == [
+        ("tenant-permissions/instances/prod/tenants/42/metadata.yaml", "prod", "42"),
+        ("instances/prod/tenants/43/metadata.yaml", "prod", "43"),
+    ]

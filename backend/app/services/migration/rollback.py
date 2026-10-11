@@ -1,9 +1,8 @@
-"""Best-effort rollback for objects created by one migration job.
+"""Best-effort rollback for objects created or updated by one migration job.
 
 This is intentionally not a transactional undo. Only successful ``create``
-items are deleted, in reverse planning order. Mapped and updated objects are
-never modified because the migration does not retain their pre-update state.
-Likewise, patches on surviving objects are left untouched. The marker tag
+items are deleted, in reverse planning order. Updated objects and deferred
+patches are restored from snapshots recorded before their writes. The marker tag
 definitions are retained because they are not job items and may be shared; tag
 associations on deleted objects disappear with those objects.
 """
@@ -14,7 +13,7 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import MigrationJob, MigrationJobItem
+from app.models import MigrationJob, MigrationJobItem, MigrationJobPatch
 from app.services.migration.client import MigrationApiError, RateLimitedClient
 from app.services.migration.planner import resolve_endpoint
 from app.services.migration.registry import Registry
@@ -26,7 +25,7 @@ def _refresh_rollback_totals(db: Session, job: MigrationJob) -> None:
     totals: dict[str, dict[str, int]] = {}
     rows = db.execute(
         select(MigrationJobItem.object_type, MigrationJobItem.execution_status)
-        .where(MigrationJobItem.job_id == job.id, MigrationJobItem.planned_action == "create")
+        .where(MigrationJobItem.job_id == job.id)
     ).all()
     for object_type, status in rows:
         counts = totals.setdefault(object_type, {})
@@ -43,11 +42,69 @@ def rollback_job(
     registry: Registry,
     target_client: RateLimitedClient,
 ) -> None:
-    """Delete this job's created objects, committing after every deletion."""
+    """Restore updates, then delete created objects, committing after each operation."""
     job.status = "rolling_back"
     job.current_step = "Preparing rollback"
     job.finished_at = None
     db.commit()
+
+    # Deferred patches ran last, so undo them first. Patches on objects created
+    # by this job need no restoration because those objects are deleted below.
+    patches = db.execute(
+        select(MigrationJobPatch).where(
+            MigrationJobPatch.job_id == job.id,
+            MigrationJobPatch.execution_status == "done",
+        ).order_by(MigrationJobPatch.order_index.desc())
+    ).scalars().all()
+    for patch in patches:
+        item = db.execute(select(MigrationJobItem).where(
+            MigrationJobItem.job_id == job.id,
+            MigrationJobItem.object_type == patch.object_type,
+            MigrationJobItem.source_id == patch.source_id,
+        )).scalar_one_or_none()
+        if item is None or item.planned_action == "create":
+            continue
+        if not patch.previous_payload_json:
+            patch.execution_status = "rollback_error"
+            patch.error_detail = "Pre-update snapshot unavailable (migration predates reversible updates)."
+        else:
+            endpoint = resolve_endpoint(target_client.nb, registry[patch.object_type].endpoint)
+            try:
+                target_client.update_by_id(endpoint, item.target_id, json.loads(patch.previous_payload_json))
+                patch.execution_status = "rolled_back"
+                patch.error_detail = None
+            except MigrationApiError as exc:
+                patch.execution_status = "rollback_error"
+                patch.error_detail = f"Rollback restore failed: {exc}"
+        patch.executed_at = utcnow()
+        db.commit()
+
+    # Restore ordinary updates before deleting any objects they may currently
+    # reference from this migration.
+    updates = db.execute(
+        select(MigrationJobItem).where(
+            MigrationJobItem.job_id == job.id,
+            MigrationJobItem.planned_action == "update",
+            MigrationJobItem.execution_status == "done",
+        ).order_by(MigrationJobItem.order_index.desc())
+    ).scalars().all()
+    for item in updates:
+        job.current_step = f"Restoring {item.object_type.split('.')[-1].replace('_', ' ').title()} #{item.target_id}"
+        if not item.previous_payload_json:
+            item.execution_status = "rollback_error"
+            item.error_detail = "Pre-update snapshot unavailable (migration predates reversible updates)."
+        else:
+            endpoint = resolve_endpoint(target_client.nb, registry[item.object_type].endpoint)
+            try:
+                target_client.update_by_id(endpoint, item.target_id, json.loads(item.previous_payload_json))
+                item.execution_status = "rolled_back"
+                item.error_detail = None
+            except MigrationApiError as exc:
+                item.execution_status = "rollback_error"
+                item.error_detail = f"Rollback restore failed: {exc}"
+        item.executed_at = utcnow()
+        db.commit()
+        _refresh_rollback_totals(db, job)
 
     while True:
         item = db.execute(
@@ -83,9 +140,15 @@ def rollback_job(
             MigrationJobItem.execution_status == "rollback_error",
         ).limit(1)
     ).first() is not None
+    has_patch_errors = db.execute(
+        select(MigrationJobPatch.id).where(
+            MigrationJobPatch.job_id == job.id,
+            MigrationJobPatch.execution_status == "rollback_error",
+        ).limit(1)
+    ).first() is not None
     _refresh_rollback_totals(db, job)
-    job.status = "rolled_back_with_errors" if has_errors else "rolled_back"
-    job.current_step = "Rollback completed with errors" if has_errors else "Rollback completed"
+    job.status = "rolled_back_with_errors" if has_errors or has_patch_errors else "rolled_back"
+    job.current_step = "Rollback completed with errors" if has_errors or has_patch_errors else "Rollback completed"
     job.finished_at = utcnow()
     db.commit()
     send_audit_entry({

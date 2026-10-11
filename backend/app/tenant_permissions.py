@@ -24,6 +24,18 @@ ROOT = next(
      if (candidate / "config/tenant-relations.yaml").exists()),
     _HERE.parents[2],
 )
+TENANT_STATE_ROOT = "tenant-permissions/instances"
+LEGACY_TENANT_STATE_ROOT = "instances"
+TENANT_TEMPLATE_ROOT = "templates/tenant-permissions"
+LEGACY_TENANT_TEMPLATE_ROOT = "templates"
+
+
+def tenant_state_base(instance_slug: str, tenant_id: int | str) -> str:
+    return f"{TENANT_STATE_ROOT}/{instance_slug}/tenants/{tenant_id}"
+
+
+def legacy_tenant_state_base(instance_slug: str, tenant_id: int | str) -> str:
+    return f"{LEGACY_TENANT_STATE_ROOT}/{instance_slug}/tenants/{tenant_id}"
 
 
 class TenantPermissionError(RuntimeError):
@@ -221,7 +233,12 @@ class TenantManager:
 
     def _template(self, name: str) -> dict[str, Any]:
         validate_template_name(name)
-        for path in (f"templates/custom/{name}.yaml", f"templates/{name}.yaml"):
+        for path in (
+            f"{TENANT_TEMPLATE_ROOT}/custom/{name}.yaml",
+            f"{TENANT_TEMPLATE_ROOT}/{name}.yaml",
+            f"{LEGACY_TENANT_TEMPLATE_ROOT}/custom/{name}.yaml",
+            f"{LEGACY_TENANT_TEMPLATE_ROOT}/{name}.yaml",
+        ):
             value = self.repo.read_yaml(path)
             if value is not None:
                 validated = validate_template(value, self.relations, self.blocked)
@@ -237,8 +254,12 @@ class TenantManager:
         tenant = self.netbox.tenant(tenant_id)
         tenant_name = str(tenant["name"])
         tenant_key = str(tenant["id"])
-        base = f"instances/{self.instance_slug}/tenants/{tenant_key}"
+        base = tenant_state_base(self.instance_slug, tenant_key)
+        legacy_base = legacy_tenant_state_base(self.instance_slug, tenant_key)
         old_meta = self.repo.read_yaml(f"{base}/metadata.yaml")
+        legacy_meta = self.repo.read_yaml(f"{legacy_base}/metadata.yaml")
+        if old_meta is None:
+            old_meta = legacy_meta
         tracked_names = set()
         if old_meta:
             tracked_names = {old_meta.get("oidc_group_ro"), old_meta.get("oidc_group_rw")}
@@ -283,12 +304,15 @@ class TenantManager:
         changes = {f"{base}/ro.resolved.yaml": rendered["ro"],
                    f"{base}/rw.resolved.yaml": rendered["rw"],
                    f"{base}/metadata.yaml": metadata}
+        # Migrate legacy tracking state in the same PR after a successful reconcile.
+        if legacy_meta is not None:
+            changes.update({path: None for path in self.repo.list_paths(legacy_base + "/")})
         unchanged = all(self.repo.read_yaml(p) == v for p, v in changes.items())
         permission_noop = all(sum(s.values()) == 0 for s in stats.values())
         # Timestamp alone must not destroy idempotency.
-        if unchanged or (old_meta and permission_noop and all(
+        if legacy_meta is None and (unchanged or (old_meta and permission_noop and all(
             old_meta.get(k) == metadata.get(k) for k in ("rw_template", "ro_template", "oidc_group_ro", "oidc_group_rw")
-        )):
+        ))):
             return {"changed": False, "stats": stats, "unscoped_grants": _all_unscoped(rendered)}
         pr = self.repo.write_pr(changes, f"Onboard tenant {tenant_name}",
                                 f"Automated tenant permission update requested by {self.actor}.")
@@ -321,8 +345,11 @@ class TenantManager:
 
     def decommission(self, tenant_id: int, force: bool = False) -> dict[str, Any]:
         tenant_key = str(tenant_id)
-        base = f"instances/{self.instance_slug}/tenants/{tenant_key}"
+        base = tenant_state_base(self.instance_slug, tenant_key)
+        legacy_base = legacy_tenant_state_base(self.instance_slug, tenant_key)
         meta = self.repo.read_yaml(f"{base}/metadata.yaml")
+        if meta is None:
+            meta = self.repo.read_yaml(f"{legacy_base}/metadata.yaml")
         if not meta:
             raise TenantPermissionError(f"No tracked metadata for {self.instance_slug}/tenant ID {tenant_id}")
         groups = [self.netbox.group(meta[k]) for k in ("oidc_group_ro", "oidc_group_rw")]
@@ -336,7 +363,8 @@ class TenantManager:
             if g:
                 result = self.netbox.delete_group_and_permissions(g, f"nbm:{self.instance_slug}:{tenant_key}:")
                 cleanup = {key: cleanup[key] + result.get(key, 0) for key in cleanup}
-        changes = {path: None for path in self.repo.list_paths(base + "/")}
+        changes = {path: None for prefix in (base + "/", legacy_base + "/")
+                   for path in self.repo.list_paths(prefix)}
         pr = self.repo.write_pr(changes, f"Decommission tenant {meta.get('tenant_name', tenant_id)}",
                                 f"Automated tenant decommission requested by {self.actor}.")
         return {"changed": True, "pr": pr, "permission_cleanup": cleanup}

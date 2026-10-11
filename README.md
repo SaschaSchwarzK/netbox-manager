@@ -46,7 +46,7 @@ The [User Guide](docs/user-guide.md) walks through each workflow in detail.
 
    ```bash
    curl -fsSL \
-     https://raw.githubusercontent.com/SaschaSchwarzK/netbox-manager/main/backend/.env.example \
+     https://raw.githubusercontent.com/SaschaSchwarzK/netbox-manager/main/.env.example \
      -o .env
 
    docker run --rm \
@@ -55,7 +55,7 @@ The [User Guide](docs/user-guide.md) walks through each workflow in detail.
      -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
    ```
 
-   Copy `backend/.env.example` to `.env`, then put the generated value in `NBM_SECRET_KEY` there. Configure OIDC or the
+   Copy `.env.example` to `.env`, then put the generated value in `NBM_SECRET_KEY` there. Configure OIDC or the
    local administrator in the same file. For an explicitly open development instance, set
    `AUTHENTICATION_DISABLED=True`. Authentication remains enforced when this variable is false,
    malformed, or absent.
@@ -95,15 +95,16 @@ using a bind mount. Size it for the largest expected exports multiplied by the n
 during the configured retention period.
 
 To update later, pull `latest` again and recreate the container while keeping all named volumes.
-The `run-docker.sh` helper uses `./.env` when present, otherwise `backend/.env`; set `ENV_FILE`
-explicitly to override that choice.
+The `run-docker.sh` helper uses `./.env` by default; set `ENV_FILE` explicitly to use another
+environment file.
 
 ### Configuration and key rotation
 
-[`backend/.env.example`](backend/.env.example) is the canonical list of environment variables.
+[`.env.example`](.env.example) is the canonical list of environment variables.
+The SQLite database is always stored at `/app/data/netbox_manager.db` and its location is not
+configurable.
 Operational controls include `NBM_ENABLE_API_DOCS` (default `false`), `NBM_LOG_FORMAT` (`human` or
 `json`), `NBM_AUDIT_RETENTION_DAYS` (default `365`, `0` keeps records forever),
-`NBM_DATABASE_PATH` (default `/app/data/netbox_manager.db`),
 `NBM_SESSION_MAX_AGE_HOURS`, `NBM_SESSION_IDLE_TIMEOUT_MINUTES`, and
 `NBM_SESSION_TOUCH_INTERVAL_SECONDS` (default `60`; limits session activity writes),
 `NBM_ARCHIVE_MAX_MIB` (default `48`, covering both compressed downloads and total uncompressed
@@ -117,7 +118,7 @@ the single process-wide archive scanner),
 `NBM_SEARCH_LIMIT_PER_TYPE` and `NBM_SEARCH_TIMEOUT_SECONDS`,
 `NBM_FLEET_CACHE_SECONDS` and `NBM_FLEET_TIMEOUT_SECONDS`,
 `NBM_MIGRATION_AUTO_RESUME`, `NBM_MIGRATION_MAX_AUTO_RESUMES`, and the `NBM_EXPORT_*` controls
-described in [`backend/.env.example`](backend/.env.example).
+described in [`.env.example`](.env.example).
 
 `NBM_SECRET_KEY` accepts a comma-separated Fernet key ring. To rotate it, prepend a new key, restart,
 back up the database, and run this inside the container:
@@ -155,8 +156,7 @@ to `/app/data/netbox_manager.db` in its persistent volume.
 
 The deployed container runs as UID/GID `65532`, drops all Linux capabilities, has a read-only root
 filesystem, and writes only to the SQLite, certificate, and export volumes plus a small `/tmp`
-tmpfs. The database defaults to `/app/data/netbox_manager.db` on the persistent data volume and can
-be relocated with `NBM_DATABASE_PATH`; certificates are always
+tmpfs. The database uses the fixed persistent path `/app/data/netbox_manager.db`; certificates are always
 `/app/certs/cert.pem` and `/app/certs/key.pem`. The certificate paths cannot be overridden with
 environment variables. The archive cap defaults to 48 MiB, leaving 8 MiB headroom in the default 64 MiB
 `/tmp` tmpfs. A tmpfs consumes RAM and counts against the container's 256 MiB memory limit; the
@@ -318,7 +318,7 @@ to NetBox-native `cf_*` keys when next saved.
 ## Troubleshooting
 
 - **The UI loads but `/api/` returns 502** — Caddy is running but the Uvicorn child process failed. Run `docker compose logs app`; the most common cause is the secret-key issue below.
-- **Backend crashes on startup with a Fernet/base64 error** — this means `NBM_SECRET_KEY` in `backend/.env` is still the placeholder value (or `backend/.env` was never created from `backend/.env.example` at all). The startup error now names this explicitly and tells you the exact command to generate a real key; see Quick start above.
+- **Backend crashes on startup with a Fernet/base64 error** — this means `NBM_SECRET_KEY` in `.env` is still the placeholder value (or `.env` was never created from `.env.example` at all). The startup error now names this explicitly and tells you the exact command to generate a real key; see Quick start above.
 - **Backend refuses to start because no authentication method is configured** — configure complete OIDC or local-admin credentials. For an intentionally open deployment, set `AUTHENTICATION_DISABLED=True` explicitly.
 
 ### Syslog forwarding

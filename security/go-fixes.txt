@@ -6,3 +6,5 @@
 # When the right-hand side is only a version, the build converts it to
 # <module>@<version>. Blank lines and comments are ignored.
 
+# CVE-2026-78669
+golang.org/x/net=v0.60.0
