@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-tenant-permissions" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.10.2">
+<title data-rh="true">Tenant permission automation | NetBox Manager</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://saschaschwarzk.github.io/netbox-manager/docs/tenant-permissions"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Tenant permission automation | NetBox Manager"><meta data-rh="true" name="description" content="Templates, onboarding, fleet updates, and safe decommissioning of tenant-scoped NetBox permissions."><meta data-rh="true" property="og:description" content="Templates, onboarding, fleet updates, and safe decommissioning of tenant-scoped NetBox permissions."><link data-rh="true" rel="icon" href="/netbox-manager/img/favicon.svg"><link data-rh="true" rel="canonical" href="https://saschaschwarzk.github.io/netbox-manager/docs/tenant-permissions"><link data-rh="true" rel="alternate" href="https://saschaschwarzk.github.io/netbox-manager/docs/tenant-permissions" hreflang="en"><link data-rh="true" rel="alternate" href="https://saschaschwarzk.github.io/netbox-manager/docs/tenant-permissions" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Tenant permissions","item":"https://saschaschwarzk.github.io/netbox-manager/docs/tenant-permissions"}]}</script><link rel="stylesheet" href="/netbox-manager/assets/css/styles.f74f1cee.css">
+<script src="/netbox-manager/assets/js/runtime~main.76df9609.js" defer="defer"></script>
+<script src="/netbox-manager/assets/js/main.1d0d171c.js" defer="defer"></script>
+</head>
+<body>
+<svg style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||"light"),document.documentElement.setAttribute("data-theme-choice",t||"light")}(),function(){try{const c=new URLSearchParams(window.location.search).entries();for(var[t,e]of c)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/netbox-manager/"><b class="navbar__title text--truncate">NetBox Manager</b></a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/netbox-manager/">Home</a><a class="navbar__item navbar__link" href="/netbox-manager/docs/quick-start">Quick start</a><a class="navbar__item navbar__link" href="/netbox-manager/docs/oidc-sso">SSO / OIDC</a><a class="navbar__item navbar__link" href="/netbox-manager/docs/owner-permissions">Owner permissions</a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/netbox-manager/docs/tenant-permissions">Tenant permissions</a><a class="navbar__item navbar__link" href="/netbox-manager/docs/user-guide">User guide</a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><a href="https://github.com/SaschaSchwarzK/netbox-manager" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div><div class="navbarSearchContainer_Bca1"></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/netbox-manager/docs/quick-start"><span class="linkLabel_WmDU">Quick start</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/netbox-manager/docs/oidc-sso"><span class="linkLabel_WmDU">SSO and OIDC</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/netbox-manager/docs/owner-permissions"><span class="linkLabel_WmDU">Owner permissions</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" href="/netbox-manager/docs/tenant-permissions"><span class="linkLabel_WmDU">Tenant permissions</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/netbox-manager/docs/owner-constraints"><span class="linkLabel_WmDU">NetBox Owner Permission Matrix (JSON Constraints)</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/netbox-manager/docs/user-guide"><span class="linkLabel_WmDU">NetBox Manager User Guide</span></a></li></ul></nav></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/netbox-manager/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">Tenant permissions</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>Tenant permission automation</h1></header>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>note</div><div class="admonitionContent_BuS1"><p>Tenant Permissions are retained for compatibility with existing tenant-scoped deployments.
+For new deployments, prefer <a class="" href="/netbox-manager/docs/owner-permissions">Owner Permission Automation</a> when NetBox
+ownership can express the required access boundary. Owner Permissions reuse one generic RO/RW
+policy per instance instead of creating groups and permission records per tenant. This reduces
+permission proliferation and can reduce NetBox database work by avoiding repeated tenant-specific
+permission evaluation and, for direct-owner models, longer relationship traversals.</p></div></div>
+<p>NetBox Manager can create and maintain a read-only and a read-write NetBox group for each tenant.
+Reusable permission templates define which NetBox object types those groups may access. Wherever
+NetBox has a reliable relationship to the tenant, the generated object permissions are constrained
+to that tenant&#x27;s immutable numeric ID.</p>
+<p>This feature manages <strong>NetBox groups and object permissions only</strong>. It does not add users to groups
+or change identity-provider membership. Your existing NetBox OIDC or SSO automation must map users
+to the exact group names entered during onboarding.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="how-the-pieces-fit-together">How the pieces fit together<a href="#how-the-pieces-fit-together" class="hash-link" aria-label="Direct link to How the pieces fit together" title="Direct link to How the pieces fit together" translate="no">​</a></h2>
+<ol>
+<li class="">A permission template in GitHub lists object types, actions, and the approved path from each
+object to its tenant.</li>
+<li class="">Onboarding selects a NetBox instance and tenant, an RO group, an RW group, and one or two
+templates.</li>
+<li class="">NetBox Manager creates or reconciles the groups and their object permissions in NetBox.</li>
+<li class="">It opens a GitHub pull request containing resolved permissions and tracking metadata.</li>
+<li class="">After that pull request is merged, the tenant appears as managed and can receive later
+fleet-wide template updates.</li>
+</ol>
+<p>GitHub stores the policy and generated state; NetBox contains the effective groups and object
+permissions. The local SQLite database does not hold tenant permission templates.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="requirements-and-authorization">Requirements and authorization<a href="#requirements-and-authorization" class="hash-link" aria-label="Direct link to Requirements and authorization" title="Direct link to Requirements and authorization" translate="no">​</a></h2>
+<p>Before onboarding a tenant:</p>
+<ul>
+<li class="">Configure a visible GitHub target whose token can read repository content, create branches, and
+open pull requests.</li>
+<li class="">Configure a visible NetBox 4.6.8 or newer instance with an API token allowed to read tenants and
+create, update, and delete groups and object permissions.</li>
+<li class="">Create or merge at least one valid permission template into the GitHub target&#x27;s base branch.</li>
+<li class="">Configure NetBox SSO so the intended identity-provider groups map to corresponding NetBox groups.</li>
+<li class="">Grant the operator at least the NetBox Manager <code>editor</code> role and the <code>admin</code> role on every
+affected NetBox instance. Application administrators also satisfy this requirement.</li>
+</ul>
+<p>Template listing is read-only. Template validation and saving require <code>editor</code>. Onboarding,
+fleet planning/apply, and decommissioning additionally require <code>admin</code> on every affected instance.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="permission-templates">Permission templates<a href="#permission-templates" class="hash-link" aria-label="Direct link to Permission templates" title="Direct link to Permission templates" translate="no">​</a></h2>
+<p>Tenant permission templates have their own namespace. Built-in templates live under
+<code>templates/tenant-permissions/</code>; custom templates created in the UI are stored under:</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">templates/tenant-permissions/custom/&lt;template-name&gt;.yaml</span><br></div></code></pre></div></div>
+<p>Repositories using the former <code>templates/&lt;template-name&gt;.yaml</code> or
+<code>templates/custom/&lt;template-name&gt;.yaml</code> paths remain readable for compatibility. New and edited
+custom templates are always written to the namespaced path.</p>
+<p>A template has this structure:</p>
+<div class="language-yaml codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-yaml codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token key atrule">name</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> tenant</span><span class="token punctuation" style="color:rgb(199, 146, 234)">-</span><span class="token plain">standard</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token key atrule">version</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> </span><span class="token number" style="color:rgb(247, 140, 108)">1</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token key atrule">description</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> Standard permissions for managed tenants</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token key atrule">permissions</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">  </span><span class="token punctuation" style="color:rgb(199, 146, 234)">-</span><span class="token plain"> </span><span class="token key atrule">object_type</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> dcim.device</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">    </span><span class="token key atrule">tenant_relation</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> tenant</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">    </span><span class="token key atrule">actions</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(199, 146, 234)">[</span><span class="token plain">view</span><span class="token punctuation" style="color:rgb(199, 146, 234)">,</span><span class="token plain"> add</span><span class="token punctuation" style="color:rgb(199, 146, 234)">,</span><span class="token plain"> change</span><span class="token punctuation" style="color:rgb(199, 146, 234)">,</span><span class="token plain"> delete</span><span class="token punctuation" style="color:rgb(199, 146, 234)">]</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain" style="display:inline-block"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">  </span><span class="token punctuation" style="color:rgb(199, 146, 234)">-</span><span class="token plain"> </span><span class="token key atrule">object_type</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> dcim.interface</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">    </span><span class="token key atrule">tenant_relation</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> device__tenant</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">    </span><span class="token key atrule">actions</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(199, 146, 234)">[</span><span class="token plain">view</span><span class="token punctuation" style="color:rgb(199, 146, 234)">,</span><span class="token plain"> add</span><span class="token punctuation" style="color:rgb(199, 146, 234)">,</span><span class="token plain"> change</span><span class="token punctuation" style="color:rgb(199, 146, 234)">]</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain" style="display:inline-block"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">  </span><span class="token punctuation" style="color:rgb(199, 146, 234)">-</span><span class="token plain"> </span><span class="token key atrule">object_type</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> virtualization.virtualmachine</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">    </span><span class="token key atrule">tenant_relation</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> tenant</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">    </span><span class="token key atrule">actions</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(199, 146, 234)">[</span><span class="token plain">view</span><span class="token punctuation" style="color:rgb(199, 146, 234)">]</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain" style="display:inline-block"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">  </span><span class="token punctuation" style="color:rgb(199, 146, 234)">-</span><span class="token plain"> </span><span class="token key atrule">object_type</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> ipam.fhrpgroup</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">    </span><span class="token key atrule">tenant_relation</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> unsupported</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">    </span><span class="token key atrule">actions</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(199, 146, 234)">[</span><span class="token punctuation" style="color:rgb(199, 146, 234)">]</span><br></div></code></pre></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="template-fields">Template fields<a href="#template-fields" class="hash-link" aria-label="Direct link to Template fields" title="Direct link to Template fields" translate="no">​</a></h3>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody><tr><td><code>name</code></td><td>Lowercase template identifier, up to 64 characters; letters, digits, <code>.</code>, <code>_</code>, and <code>-</code> are accepted</td></tr><tr><td><code>version</code></td><td>String or integer recorded in managed-tenant metadata</td></tr><tr><td><code>description</code></td><td>Human-readable purpose of the template</td></tr><tr><td><code>object_type</code></td><td>NetBox object type in <code>&lt;app_label&gt;.&lt;model&gt;</code> form</td></tr><tr><td><code>tenant_relation</code></td><td>Approved Django-style path from that object to its tenant</td></tr><tr><td><code>actions</code></td><td>Any of <code>view</code>, <code>add</code>, <code>change</code>, and <code>delete</code></td></tr><tr><td><code>accept_unscoped</code></td><td>Explicitly allow actions without tenant constraints when no reliable relation exists</td></tr><tr><td><code>note</code></td><td>Required justification when <code>accept_unscoped: true</code> is used</td></tr><tr><td><code>no_auto_view</code></td><td>Prevent automatic addition of <code>view</code> when another action is granted</td></tr></tbody></table>
+<p>Validation is fail-closed. Every object type must be present in NetBox Manager&#x27;s canonical
+<code>tenant-relations.yaml</code>, the supplied <code>tenant_relation</code> must match it exactly, and blocklisted
+object types are rejected. Duplicate object types and unknown actions are also rejected.</p>
+<p>Unless <code>no_auto_view: true</code> is set, validation automatically adds <code>view</code> when <code>add</code>, <code>change</code>, or
+<code>delete</code> is requested. The UI rewrites the editor with this normalized result after validation.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="tenant-constraints">Tenant constraints<a href="#tenant-constraints" class="hash-link" aria-label="Direct link to Tenant constraints" title="Direct link to Tenant constraints" translate="no">​</a></h3>
+<p>For a selected tenant with ID <code>42</code>, these relations become NetBox object-permission constraints:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Template relation</th><th>Generated constraint</th></tr></thead><tbody><tr><td><code>tenant</code></td><td><code>tenant__id: 42</code></td></tr><tr><td><code>device__tenant</code></td><td><code>device__tenant__id: 42</code></td></tr><tr><td><code>virtual_machine__tenant</code></td><td><code>virtual_machine__tenant__id: 42</code></td></tr></tbody></table>
+<p>The registry contains direct and reviewed indirect paths for supported NetBox models. It is the
+source of truth; templates cannot invent a different path.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="unsupported-and-unscoped-grants">Unsupported and unscoped grants<a href="#unsupported-and-unscoped-grants" class="hash-link" aria-label="Direct link to Unsupported and unscoped grants" title="Direct link to Unsupported and unscoped grants" translate="no">​</a></h3>
+<p>Some global objects or generic relationships cannot be constrained reliably to one tenant. Their
+registry value is <code>unsupported</code>. The safe default is an empty <code>actions</code> list.</p>
+<p>Granting actions for such an object requires both:</p>
+<div class="language-yaml codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-yaml codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token key atrule">tenant_relation</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> unsupported</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token key atrule">accept_unscoped</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> </span><span class="token boolean important" style="color:rgb(255, 88, 116)">true</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token key atrule">note</span><span class="token punctuation" style="color:rgb(199, 146, 234)">:</span><span class="token plain"> Required business justification for access across every tenant</span><br></div></code></pre></div></div>
+<p>This produces an object permission with empty constraints, so it applies across all tenants. The
+editor, plan, and apply result highlight these grants. Treat every warning as a security review,
+not as informational noise.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="create-or-update-a-template">Create or update a template<a href="#create-or-update-a-template" class="hash-link" aria-label="Direct link to Create or update a template" title="Direct link to Create or update a template" translate="no">​</a></h2>
+<ol>
+<li class="">Open <strong>Tenant Permissions</strong> and select the GitHub target.</li>
+<li class="">Open <strong>Templates</strong> and select <strong>New custom template</strong>, or edit an existing custom template.</li>
+<li class="">Enter the YAML and select <strong>Validate</strong>.</li>
+<li class="">Review normalization and all unscoped-grant warnings.</li>
+<li class="">Select <strong>Validate, save, and open PR</strong>.</li>
+<li class="">Review and merge the pull request before using the new version.</li>
+</ol>
+<p>Saving never commits directly to the configured base branch. Renaming a custom template creates
+the new file and removes its previous custom-template path in the same pull request.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="onboard-a-tenant">Onboard a tenant<a href="#onboard-a-tenant" class="hash-link" aria-label="Direct link to Onboard a tenant" title="Direct link to Onboard a tenant" translate="no">​</a></h2>
+<ol>
+<li class="">Open <strong>Onboard tenant</strong> and select a NetBox instance.</li>
+<li class="">Search NetBox for the tenant and select it by name and numeric ID.</li>
+<li class="">Enter distinct, exact RO and RW OIDC group names.</li>
+<li class="">Select the RW permission template.</li>
+<li class="">Optionally select a separate RO template. If omitted, NetBox Manager derives one from the RW
+template by retaining only <code>view</code> for entries that grant any actions.</li>
+<li class="">Select <strong>Reconcile and open PR</strong>.</li>
+<li class="">Review the NetBox result and merge the generated-state pull request.</li>
+</ol>
+<p>Before changing NetBox, the operation validates all templates and checks for group-name
+collisions. If either group already exists but is not tracked for this tenant, onboarding stops
+instead of taking ownership of it. RO and RW names must differ.</p>
+<p>Reconciliation creates or updates desired permissions before deleting obsolete managed
+permissions, avoiding an intentionally permissionless transition. It manages only permissions
+whose generated names belong to this tenant and role.</p>
+<p>The NetBox changes occur before the tracking pull request is created. If the GitHub operation
+fails, inspect NetBox and retry onboarding after correcting repository access. The reconciliation
+is designed to be idempotent: rerunning an unchanged configuration produces no permission changes.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="generated-repository-state">Generated repository state<a href="#generated-repository-state" class="hash-link" aria-label="Direct link to Generated repository state" title="Direct link to Generated repository state" translate="no">​</a></h2>
+<p>Onboarding writes these files through a pull request:</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">tenant-permissions/instances/&lt;instance-name&gt;/tenants/&lt;tenant-id&gt;/metadata.yaml</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">tenant-permissions/instances/&lt;instance-name&gt;/tenants/&lt;tenant-id&gt;/ro.resolved.yaml</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">tenant-permissions/instances/&lt;instance-name&gt;/tenants/&lt;tenant-id&gt;/rw.resolved.yaml</span><br></div></code></pre></div></div>
+<p>This namespace keeps Tenant Permissions state separate from Owner Permissions and other generated
+instance data. Installations upgrading from the legacy
+<code>instances/&lt;instance-name&gt;/tenants/&lt;tenant-id&gt;/</code> layout remain readable. The next successful
+reconcile writes the new path and removes the legacy files in the same pull request.</p>
+<p><code>metadata.yaml</code> records the immutable tenant ID, display name, selected templates and versions,
+RO/RW group names, last-apply time, and requesting actor. The resolved files show the exact
+permissions and constraints rendered for each group, including warnings for unscoped grants.</p>
+<p>NetBox Manager discovers managed tenants from metadata merged into the configured base branch.
+An open pull request alone does not make a tenant available for fleet apply or decommissioning.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="apply-a-template-fleet-wide">Apply a template fleet-wide<a href="#apply-a-template-fleet-wide" class="hash-link" aria-label="Direct link to Apply a template fleet-wide" title="Direct link to Apply a template fleet-wide" translate="no">​</a></h2>
+<p>Use fleet apply after merging an updated template:</p>
+<ol>
+<li class="">Open <strong>Templates</strong> and select <strong>Plan fleet apply</strong> beside the template.</li>
+<li class="">NetBox Manager finds visible managed tenants whose RO or RW metadata references that template.</li>
+<li class="">Review the per-instance create, update, and delete counts and every unscoped grant.</li>
+<li class="">Application is disabled if any tenant plan reports an error.</li>
+<li class="">Select <strong>Confirm fleet apply</strong> only after reviewing every row.</li>
+</ol>
+<p>Planning reads NetBox and GitHub but performs no mutation. Apply reconciles each matching tenant
+independently and reports success or failure per instance. All selected instances are authorized
+before planning or applying begins. Successful changes update generated state through pull
+requests; failures are retained in the audit log.</p>
+<p>Only templates and managed-tenant metadata present on the GitHub target&#x27;s configured base branch
+drive fleet operations. Content that exists only on a pull-request branch is not applied.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="decommission-a-tenant">Decommission a tenant<a href="#decommission-a-tenant" class="hash-link" aria-label="Direct link to Decommission a tenant" title="Direct link to Decommission a tenant" translate="no">​</a></h2>
+<p>Open <strong>Managed tenants</strong> and select <strong>Decommission</strong>. NetBox Manager first checks whether either
+managed NetBox group still has members. The safe operation refuses to continue when members are
+present and identifies the affected groups. Remove or migrate those memberships first.</p>
+<p>If you explicitly confirm forced deletion, NetBox Manager:</p>
+<ul>
+<li class="">Removes the tenant&#x27;s RO and RW NetBox groups.</li>
+<li class="">Deletes permissions owned solely by those groups and this managed tenant.</li>
+<li class="">Detaches the groups from shared or foreign permissions instead of deleting those permissions.</li>
+<li class="">Opens a pull request removing the tenant&#x27;s generated repository directory.</li>
+</ul>
+<p>Decommissioning does not delete the NetBox tenant or its infrastructure objects. NetBox cleanup
+happens before the repository cleanup PR is opened, so inspect both systems and retry safely if
+the GitHub step fails.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="audit-and-safety-model">Audit and safety model<a href="#audit-and-safety-model" class="hash-link" aria-label="Direct link to Audit and safety model" title="Direct link to Audit and safety model" translate="no">​</a></h2>
+<ul>
+<li class="">Template saves, NetBox reconciliations, generated-state changes, fleet apply, and decommission
+results are attributed to the signed-in actor in the audit log.</li>
+<li class="">Group-name collision detection prevents accidental takeover of unmanaged groups.</li>
+<li class="">Tenant IDs, rather than mutable tenant names, scope permissions and tracking paths.</li>
+<li class="">Validation rejects unknown relations and blocklisted object types.</li>
+<li class="">Unscoped grants require an explicit flag and justification and remain visible in resolved state.</li>
+<li class="">Pull requests provide review for templates and generated repository state, but NetBox mutations
+performed during onboarding, apply, or decommission are not delayed until those PRs merge.</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="troubleshooting">Troubleshooting<a href="#troubleshooting" class="hash-link" aria-label="Direct link to Troubleshooting" title="Direct link to Troubleshooting" translate="no">​</a></h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Symptom</th><th>What to check</th></tr></thead><tbody><tr><td>Tenant search returns nothing</td><td>Instance visibility, NetBox connectivity, token access to <code>/api/tenancy/tenants/</code>, and the search text</td></tr><tr><td>A template is rejected</td><td>Required fields, object-type spelling, canonical <code>tenant_relation</code>, blocklist status, duplicate entries, and allowed actions</td></tr><tr><td>An existing group causes onboarding to stop</td><td>Use a new name or verify why the existing group is not already tracked for this tenant; NetBox Manager will not adopt it implicitly</td></tr><tr><td>Users do not receive the expected access</td><td>NetBox SSO group mapping and exact RO/RW names; this feature does not manage membership</td></tr><tr><td>Plan reports an unscoped grant</td><td>Inspect the template&#x27;s <code>accept_unscoped</code> entry and justification before applying</td></tr><tr><td>A managed tenant is missing</td><td>Merge its generated-state PR into the target&#x27;s configured base branch</td></tr><tr><td>Fleet apply matches zero tenants</td><td>Confirm merged metadata references that exact template name as RW, RO, or derived RO source</td></tr><tr><td>Decommission refuses to continue</td><td>Remove users from both groups, or use force only after confirming the consequences</td></tr><tr><td>NetBox changed but the PR failed</td><td>Correct GitHub credentials/access and rerun the idempotent operation; inspect the audit record first</td></tr></tbody></table></div><footer class="theme-doc-footer docusaurus-mt-lg"><div class="row margin-top--sm theme-doc-footer-edit-meta-row"><div class="col noPrint_WFHX"><a href="https://github.com/SaschaSchwarzK/netbox-manager/edit/develop/docs/.docs-build/tenant-permissions.md" target="_blank" rel="noopener noreferrer" class="theme-edit-this-page"><svg fill="currentColor" height="20" width="20" viewBox="0 0 40 40" class="iconEdit_Z9Sw" aria-hidden="true"><g><path d="m34.5 11.7l-3 3.1-6.3-6.3 3.1-3q0.5-0.5 1.2-0.5t1.1 0.5l3.9 3.9q0.5 0.4 0.5 1.1t-0.5 1.2z m-29.5 17.1l18.4-18.5 6.3 6.3-18.4 18.4h-6.3v-6.2z"></path></g></svg>Edit this page</a></div><div class="col lastUpdated_JAkA"></div></div></footer></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/netbox-manager/docs/owner-permissions"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Owner permissions</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/netbox-manager/docs/owner-constraints"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">NetBox Owner Permission Matrix (JSON Constraints)</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#how-the-pieces-fit-together" class="table-of-contents__link toc-highlight">How the pieces fit together</a></li><li><a href="#requirements-and-authorization" class="table-of-contents__link toc-highlight">Requirements and authorization</a></li><li><a href="#permission-templates" class="table-of-contents__link toc-highlight">Permission templates</a><ul><li><a href="#template-fields" class="table-of-contents__link toc-highlight">Template fields</a></li><li><a href="#tenant-constraints" class="table-of-contents__link toc-highlight">Tenant constraints</a></li><li><a href="#unsupported-and-unscoped-grants" class="table-of-contents__link toc-highlight">Unsupported and unscoped grants</a></li></ul></li><li><a href="#create-or-update-a-template" class="table-of-contents__link toc-highlight">Create or update a template</a></li><li><a href="#onboard-a-tenant" class="table-of-contents__link toc-highlight">Onboard a tenant</a></li><li><a href="#generated-repository-state" class="table-of-contents__link toc-highlight">Generated repository state</a></li><li><a href="#apply-a-template-fleet-wide" class="table-of-contents__link toc-highlight">Apply a template fleet-wide</a></li><li><a href="#decommission-a-tenant" class="table-of-contents__link toc-highlight">Decommission a tenant</a></li><li><a href="#audit-and-safety-model" class="table-of-contents__link toc-highlight">Audit and safety model</a></li><li><a href="#troubleshooting" class="table-of-contents__link toc-highlight">Troubleshooting</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="footer__bottom text--center"><div class="footer__copyright">NetBox Manager documentation. Built with Docusaurus.</div></div></div></footer></div>
+</body>
+</html>
