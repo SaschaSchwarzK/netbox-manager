@@ -37,7 +37,7 @@ def main() -> int:
             model = apps.get_model(object_type)
             final = resolve(model, entry["path"])
             if final.related_model is not User or not final.many_to_many:
-                raise ValueError("lookup does not terminate at users.User M2M")
+                raise ValueError("lookup does not terminate at the users.Group.user reverse M2M relation")
             print(f"OK       {object_type}: {entry['path']}")
         except Exception as exc:  # noqa: BLE001 - report every invalid Django lookup and continue
             print(f"MISMATCH {object_type}: {entry.get('path')!r}: {exc}")

@@ -4,39 +4,40 @@ verified_against:
   - "NetBox 4.7.0"
 
 # Fail-closed registry. A template may use only the exact path declared here.
-# Paths end at users.Owner.users so NetBox can replace "$user" with the
-# requesting NetBox user's primary key during ObjectPermission evaluation.
+# Paths traverse users.Owner.user_groups to the group's reverse `user`
+# relationship. NetBox replaces "$user" with the requesting user's primary
+# key during ObjectPermission evaluation.
 relations:
   dcim.device:
-    path: "owner__users"
+    path: "owner__user_groups__user"
     mode: direct
   dcim.interface:
-    path: "device__owner__users"
+    path: "device__owner__user_groups__user"
     mode: parent
   dcim.consoleport:
-    path: "device__owner__users"
+    path: "device__owner__user_groups__user"
     mode: parent
   dcim.consoleserverport:
-    path: "device__owner__users"
+    path: "device__owner__user_groups__user"
     mode: parent
   dcim.powerport:
-    path: "device__owner__users"
+    path: "device__owner__user_groups__user"
     mode: parent
   dcim.poweroutlet:
-    path: "device__owner__users"
+    path: "device__owner__user_groups__user"
     mode: parent
   dcim.frontport:
-    path: "device__owner__users"
+    path: "device__owner__user_groups__user"
     mode: parent
   dcim.rearport:
-    path: "device__owner__users"
+    path: "device__owner__user_groups__user"
     mode: parent
   dcim.module:
-    path: "device__owner__users"
+    path: "device__owner__user_groups__user"
     mode: parent
   dcim.modulebay:
-    path: "device__owner__users"
+    path: "device__owner__user_groups__user"
     mode: parent
   dcim.inventoryitem:
-    path: "device__owner__users"
+    path: "device__owner__user_groups__user"
     mode: parent
