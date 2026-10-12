@@ -5,7 +5,10 @@ import pytest
 from app.owner_permissions import OwnerManager, OwnerPermissionError, render_owner_template, validate_owner_template
 from app.tenant_permissions import MembersPresentError
 
-RELATIONS = {"dcim.device": {"path": "owner__users"}, "dcim.interface": {"path": "device__owner__users"}}
+RELATIONS = {
+    "dcim.device": {"path": "owner__user_groups__user"},
+    "dcim.interface": {"path": "device__owner__user_groups__user"},
+}
 
 
 def template(entries=None, name="owners", version=1):
@@ -14,18 +17,18 @@ def template(entries=None, name="owners", version=1):
 
 def test_registry_paths_token_and_action_normalization():
     value = validate_owner_template(template([
-        {"object_type": "dcim.device", "owner_relation": "owner__users", "actions": ["change"]},
-        {"object_type": "dcim.interface", "owner_relation": "device__owner__users", "actions": ["change"]},
+        {"object_type": "dcim.device", "owner_relation": "owner__user_groups__user", "actions": ["change"]},
+        {"object_type": "dcim.interface", "owner_relation": "device__owner__user_groups__user", "actions": ["change"]},
     ]), RELATIONS, set())
     rendered = render_owner_template(value, "prod", "owners-rw")
     assert value["permissions"][0]["actions"] == ["view", "change"]
-    assert rendered["permissions"][0]["constraints"] == {"owner__users": "$user"}
-    assert rendered["permissions"][1]["constraints"] == {"device__owner__users": "$user"}
+    assert rendered["permissions"][0]["constraints"] == {"owner__user_groups__user": "$user"}
+    assert rendered["permissions"][1]["constraints"] == {"device__owner__user_groups__user": "$user"}
 
 
 @pytest.mark.parametrize("entry", [
     {"object_type": "dcim.device", "owner_relation": "owner", "actions": ["view"]},
-    {"object_type": "ipam.prefix", "owner_relation": "owner__users", "actions": ["view"]},
+    {"object_type": "ipam.prefix", "owner_relation": "owner__user_groups__user", "actions": ["view"]},
 ])
 def test_unknown_or_mismatched_paths_fail_closed(entry):
     with pytest.raises(OwnerPermissionError):
@@ -33,18 +36,22 @@ def test_unknown_or_mismatched_paths_fail_closed(entry):
 
 
 def test_identical_owner_grants_are_combined():
-    relations = {"dcim.device": {"path": "owner__users"}, "dcim.site": {"path": "owner__users"}}
+    relations = {
+        "dcim.device": {"path": "owner__user_groups__user"},
+        "dcim.site": {"path": "owner__user_groups__user"},
+    }
     value = validate_owner_template(template([
-        {"object_type": "dcim.device", "owner_relation": "owner__users", "actions": ["view"]},
-        {"object_type": "dcim.site", "owner_relation": "owner__users", "actions": ["view"]},
+        {"object_type": "dcim.device", "owner_relation": "owner__user_groups__user", "actions": ["view"]},
+        {"object_type": "dcim.site", "owner_relation": "owner__user_groups__user", "actions": ["view"]},
     ]), relations, set())
     assert render_owner_template(value, "prod", "owners-ro")["permissions"] == [{
-        "object_types": ["dcim.device", "dcim.site"], "actions": ["view"], "constraints": {"owner__users": "$user"},
+        "object_types": ["dcim.device", "dcim.site"], "actions": ["view"],
+        "constraints": {"owner__user_groups__user": "$user"},
     }]
 
 
 class Repo:
-    def __init__(self): self.files = {"templates/owner-permissions/owners.yaml": template([{"object_type": "dcim.device", "owner_relation": "owner__users", "actions": ["change"]}])}; self.prs = []
+    def __init__(self): self.files = {"templates/owner-permissions/owners.yaml": template([{"object_type": "dcim.device", "owner_relation": "owner__user_groups__user", "actions": ["change"]}])}; self.prs = []
     def read_yaml(self, path): return copy.deepcopy(self.files.get(path))
     def list_paths(self, prefix): return [p for p in self.files if p.startswith(prefix)]
     def write_pr(self, changes, title, body):

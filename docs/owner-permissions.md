@@ -10,7 +10,7 @@ description: Shared owner-based NetBox permissions, templates, fleet reconciliat
 Owner Permissions are the recommended way to grant users access to the NetBox resources they own.
 NetBox Manager maintains one shared read-only group and one shared read-write group per NetBox
 instance. Reusable templates define the allowed object types and actions, while NetBox evaluates
-the current user's membership in each resource's Owner.
+the current user's membership in a user group assigned to each resource's Owner.
 
 Unlike Tenant Permissions, the generated policy is not duplicated for every tenant. The same two
 groups and generic Object Permissions serve all owners on an instance. This reduces the number of
@@ -26,24 +26,26 @@ under NetBox and OIDC/SSO administration.
 
 ## How the pieces fit together
 
-1. NetBox administrators create Owners and assign NetBox users to each Owner.
+1. NetBox administrators create Owners and assign NetBox user groups to each Owner.
 2. Resources receive an Owner in NetBox, either directly or through an explicitly supported parent.
 3. An owner template in GitHub lists object types, actions, and the approved lookup path to
-   `users.Owner.users`.
+   `users.Owner.user_groups.user`.
 4. Reconcile creates or updates one shared RO group and one shared RW group on the instance.
 5. Every constraint retains the literal `"$user"`; NetBox replaces it with the authenticated
    NetBox user's primary key when filtering a queryset.
 6. NetBox Manager opens a pull request containing resolved permissions and tracking metadata.
 
 GitHub stores policy and generated state. NetBox contains the effective groups, permissions,
-Owners, and user assignments. The local SQLite database does not hold owner templates.
+Owners, and user-group assignments. The local SQLite database does not hold owner templates.
 
 ## Requirements and authorization
 
 Before reconciling Owner Permissions:
 
 - Use NetBox 4.6.8 or newer with resource ownership available.
-- Create the required Owners and assign users to them in NetBox.
+- Create the required Owners and assign user groups to them in NetBox. Users gain ownership through
+  membership in those groups; assigning a user directly to an Owner does not satisfy the generated
+  group-based constraint.
 - Assign an Owner to every resource that should be accessible. Ownership is not inferred from a
   tenant, OIDC group, or local NetBox Manager identity.
 - Configure a GitHub target whose token can read repository content, create branches, and open
@@ -92,11 +94,11 @@ version: 1
 description: Let owners manage devices and interfaces belonging to their devices
 permissions:
   - object_type: dcim.device
-    owner_relation: owner__users
+    owner_relation: owner__user_groups__user
     actions: [view, add, change, delete]
 
   - object_type: dcim.interface
-    owner_relation: device__owner__users
+    owner_relation: device__owner__user_groups__user
     actions: [view, add, change, delete]
 ```
 
@@ -108,7 +110,7 @@ permissions:
 | `version` | String or integer recorded in managed-instance metadata |
 | `description` | Human-readable purpose of the template |
 | `object_type` | NetBox object type in `<app_label>.<model>` form |
-| `owner_relation` | Exact approved lookup from that object to `users.Owner.users` |
+| `owner_relation` | Exact approved lookup from that object through `users.Owner.user_groups` to the current user |
 | `actions` | Any of `view`, `add`, `change`, and `delete` |
 | `no_auto_view` | Prevent automatic addition of `view` when another action is granted |
 
@@ -128,8 +130,8 @@ The renderer copies the approved path exactly and always uses the literal string
 
 | Object type | Generated constraint |
 |---|---|
-| `dcim.device` | `{"owner__users": "$user"}` |
-| `dcim.interface` | `{"device__owner__users": "$user"}` |
+| `dcim.device` | `{"owner__user_groups__user": "$user"}` |
+| `dcim.interface` | `{"device__owner__user_groups__user": "$user"}` |
 
 NetBox Manager does not replace the token with an OIDC subject, local actor ID, API-token identity,
 or NetBox user ID. During permission evaluation, NetBox replaces `"$user"` with the primary key of
@@ -137,8 +139,8 @@ the authenticated NetBox user and applies the resulting Django queryset filter.
 
 Owner relationships are explicit per object type. A Device permission does not automatically
 grant Interface permission. The Interface entry must declare the complete
-`device__owner__users` traversal. Conversely, an Interface's own Owner is not consulted when the
-approved policy deliberately scopes it through its Device.
+`device__owner__user_groups__user` traversal. Conversely, an Interface's own Owner is not
+consulted when the approved policy deliberately scopes it through its Device.
 
 Permissions are combined only when actions and constraints are identical. Direct-owner and
 parent-owner grants therefore remain separate even if they allow the same actions.
@@ -149,12 +151,12 @@ The registry was source-reviewed against NetBox 4.6.8 and 4.7.0. It currently pe
 
 | Object types | Approved path |
 |---|---|
-| `dcim.device` | `owner__users` |
-| `dcim.interface` | `device__owner__users` |
-| `dcim.consoleport`, `dcim.consoleserverport` | `device__owner__users` |
-| `dcim.powerport`, `dcim.poweroutlet` | `device__owner__users` |
-| `dcim.frontport`, `dcim.rearport` | `device__owner__users` |
-| `dcim.module`, `dcim.modulebay`, `dcim.inventoryitem` | `device__owner__users` |
+| `dcim.device` | `owner__user_groups__user` |
+| `dcim.interface` | `device__owner__user_groups__user` |
+| `dcim.consoleport`, `dcim.consoleserverport` | `device__owner__user_groups__user` |
+| `dcim.powerport`, `dcim.poweroutlet` | `device__owner__user_groups__user` |
+| `dcim.frontport`, `dcim.rearport` | `device__owner__user_groups__user` |
+| `dcim.module`, `dcim.modulebay`, `dcim.inventoryitem` | `device__owner__user_groups__user` |
 
 Other models remain unavailable until their intended ownership semantics and complete lookup path
 are verified. An `owner` field in OpenAPI alone is not sufficient evidence that a permission path
@@ -167,8 +169,8 @@ Validate the registry inside each deployed NetBox environment:
   --registry config/owner-relations.yaml
 ```
 
-The script resolves every complete lookup through Django model metadata and verifies that it ends
-at the `users.User` many-to-many relationship.
+The script resolves every complete lookup through Django model metadata and verifies that it
+reaches `users.User` through the user group's reverse many-to-many relationship.
 
 ## Create or update a template
 
@@ -258,8 +260,8 @@ objects.
 | Symptom | What to check |
 |---|---|
 | A template is rejected | Exact `object_type` and `owner_relation`, registry support, blocklist status, duplicates, and allowed actions |
-| A user sees no owned objects | The user exists in NetBox, belongs to the resource's Owner, belongs to the shared RO/RW group, and the resource has the expected Owner |
-| A Device is visible but its Interface is not | The template needs a separate `dcim.interface` entry using `device__owner__users` |
+| A user sees no owned objects | The user exists in NetBox, belongs to a user group assigned to the resource's Owner, belongs to the shared RO/RW group, and the resource has the expected Owner |
+| A Device is visible but its Interface is not | The template needs a separate `dcim.interface` entry using `device__owner__user_groups__user` |
 | Existing group blocks reconcile | Use another name or verify it is already tracked for this instance; unmanaged groups are never adopted implicitly |
 | Managed instance is missing | Merge its generated-state PR into the configured base branch |
 | Fleet apply matches nothing | Confirm merged metadata references the exact template name |

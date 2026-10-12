@@ -55,12 +55,12 @@ def test_owner_reconcile_preserves_user_token_in_exact_netbox_payload():
 
     result = client.reconcile({"id": 7}, [{
         "object_type": "dcim.interface", "actions": ["view", "change"],
-        "constraints": {"device__owner__users": "$user"},
+        "constraints": {"device__owner__user_groups__user": "$user"},
     }], "nbm:owner:prod:rw")
 
     assert result == {"created": 1, "updated": 0, "deleted": 0}
     body = responses.calls[1].request.body
-    assert b'"constraints": {"device__owner__users": "$user"}' in body
+    assert b'"constraints": {"device__owner__user_groups__user": "$user"}' in body
     assert b'"groups": [7]' in body
 
 

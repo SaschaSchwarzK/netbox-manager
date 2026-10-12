@@ -197,10 +197,11 @@ Keep these safety rules in mind:
 
 The **Owner Permissions** page is the recommended permission automation workflow for new
 deployments. It creates one shared RO group and one shared RW group per NetBox instance and uses
-generic constraints such as `{"owner__users": "$user"}`. NetBox replaces `"$user"` with the
-authenticated NetBox user's ID, so the same Object Permissions serve every Owner on the instance.
+generic constraints such as `{"owner__user_groups__user": "$user"}`. NetBox replaces `"$user"`
+with the authenticated NetBox user's ID, so the same Object Permissions serve every Owner on the
+instance.
 
-Create Owners and their user assignments in NetBox, assign Owners to resources, then use the page
+Create Owners and assign NetBox user groups to them, assign Owners to resources, then use the page
 to manage templates, reconcile the shared groups, preview and apply fleet-wide updates, and safely
 decommission the managed groups. NetBox Manager does not manage Owner membership, OIDC mappings,
 or NetBox group membership. See [Owner Permission Automation](owner-permissions.md) for template

@@ -7,7 +7,7 @@
   * `dcim.device`
   * Constraint:
     ```json
-    { "owner__users": "$user" }
+    { "owner__user_groups__user": "$user" }
     ```
 
 ### Components Directly Attached to Devices
@@ -27,20 +27,20 @@ Applies to all physical interfaces, bays, and ports of a device.
 *Unified constraint for all components above:*
 
 ```json
-{ "device__owner__users": "$user" }
+{ "device__owner__user_groups__user": "$user" }
 ```
 
 ### Inventory & Extensions
 * **Inventory Items:** `dcim.inventoryitem`
 
 ```json
-{ "device__owner__users": "$user" }
+{ "device__owner__user_groups__user": "$user" }
 ```
 
 * **Virtual Device Contexts (VDCs):** `dcim.virtualdevicecontext`
 
 ```json
-{ "device__owner__users": "$user" }
+{ "device__owner__user_groups__user": "$user" }
 ```
 
 ### Cables
@@ -51,8 +51,8 @@ Applies to all physical interfaces, bays, and ports of a device.
 ```json
 {
   "any": [
-    { "_termination_a_device__owner__users": "$user" },
-    { "_termination_b_device__owner__users": "$user" }
+    { "_termination_a_device__owner__user_groups__user": "$user" },
+    { "_termination_b_device__owner__user_groups__user": "$user" }
   ]
 }
 ```
@@ -61,19 +61,19 @@ Applies to all physical interfaces, bays, and ports of a device.
 * **Power Feeds:** `dcim.powerfeed`
 
 ```json
-{ "rack__devices__owner__users": "$user" }
+{ "rack__devices__owner__user_groups__user": "$user" }
 ```
 
 * **Racks:** `dcim.rack`
 
 ```json
-{ "devices__owner__users": "$user" }
+{ "devices__owner__user_groups__user": "$user" }
 ```
 
 * **Rack Reservations:** `dcim.rackreservation`
 
 ```json
-{ "rack__devices__owner__users": "$user" }
+{ "rack__devices__owner__user_groups__user": "$user" }
 ```
 
 * **Power Panels:** `dcim.powerpanel`
@@ -99,20 +99,20 @@ Applies to all physical interfaces, bays, and ports of a device.
 * **Virtual Machines (VMs):** `virtualization.virtualmachine`
 
 ```json
-{ "owner__users": "$user" }
+{ "owner__user_groups__user": "$user" }
 ```
 
 ### VM Components
 * **VM Interfaces:** `virtualization.vminterface`
 
 ```json
-{ "virtual_machine__owner__users": "$user" }
+{ "virtual_machine__owner__user_groups__user": "$user" }
 ```
 
 * **Virtual Disks:** `virtualization.virtualdisk`
 
 ```json
-{ "virtual_machine__owner__users": "$user" }
+{ "virtual_machine__owner__user_groups__user": "$user" }
 ```
 
 ### Cluster Structures
@@ -135,8 +135,8 @@ Since IPAM objects can be linked through generic relations to either Devices or 
 ```json
 {
   "any": [
-    { "assigned_object_id__device__owner__users": "$user" },
-    { "assigned_object_id__virtual_machine__owner__users": "$user" }
+    { "assigned_object_id__device__owner__user_groups__user": "$user" },
+    { "assigned_object_id__virtual_machine__owner__user_groups__user": "$user" }
   ]
 }
 ```
@@ -146,8 +146,8 @@ Since IPAM objects can be linked through generic relations to either Devices or 
 ```json
 {
   "any": [
-    { "device__owner__users": "$user" },
-    { "virtual_machine__owner__users": "$user" }
+    { "device__owner__user_groups__user": "$user" },
+    { "virtual_machine__owner__user_groups__user": "$user" }
   ]
 }
 ```
@@ -157,8 +157,8 @@ Since IPAM objects can be linked through generic relations to either Devices or 
 ```json
 {
   "any": [
-    { "interface__device__owner__users": "$user" },
-    { "vminterface__virtual_machine__owner__users": "$user" }
+    { "interface__device__owner__user_groups__user": "$user" },
+    { "vminterface__virtual_machine__owner__user_groups__user": "$user" }
   ]
 }
 ```
@@ -200,7 +200,7 @@ If you want users to gain access to objects based on their **Tenant** instead of
 * **Circuits:** `circuits.circuit`
 
 ```json
-{ "terminations__site__devices__owner__users": "$user" }
+{ "terminations__site__devices__owner__user_groups__user": "$user" }
 ```
 
 * **Providers / Provider Accounts / Provider Networks / Circuit Types**
@@ -217,8 +217,8 @@ If you want users to gain access to objects based on their **Tenant** instead of
 ```json
 {
   "any": [
-    { "termination_id__device__owner__users": "$user" },
-    { "termination_id__virtual_machine__owner__users": "$user" }
+    { "termination_id__device__owner__user_groups__user": "$user" },
+    { "termination_id__virtual_machine__owner__user_groups__user": "$user" }
   ]
 }
 ```
