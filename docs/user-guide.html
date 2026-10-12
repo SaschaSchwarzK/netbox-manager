@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">NetBox Manager User Guide | NetBox Manager</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://saschaschwarzk.github.io/netbox-manager/docs/user-guide"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="NetBox Manager User Guide | NetBox Manager"><meta data-rh="true" name="description" content="This guide explains the day-to-day workflows in NetBox Manager. It is intended for viewers,"><meta data-rh="true" property="og:description" content="This guide explains the day-to-day workflows in NetBox Manager. It is intended for viewers,"><link data-rh="true" rel="icon" href="/netbox-manager/img/favicon.svg"><link data-rh="true" rel="canonical" href="https://saschaschwarzk.github.io/netbox-manager/docs/user-guide"><link data-rh="true" rel="alternate" href="https://saschaschwarzk.github.io/netbox-manager/docs/user-guide" hreflang="en"><link data-rh="true" rel="alternate" href="https://saschaschwarzk.github.io/netbox-manager/docs/user-guide" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"NetBox Manager User Guide","item":"https://saschaschwarzk.github.io/netbox-manager/docs/user-guide"}]}</script><link rel="stylesheet" href="/netbox-manager/assets/css/styles.f74f1cee.css">
-<script src="/netbox-manager/assets/js/runtime~main.76df9609.js" defer="defer"></script>
+<script src="/netbox-manager/assets/js/runtime~main.05403122.js" defer="defer"></script>
 <script src="/netbox-manager/assets/js/main.1d0d171c.js" defer="defer"></script>
 </head>
 <body>
@@ -177,9 +177,10 @@ Assignment types that cannot be resolved reliably by name are omitted.</li>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="10-automate-owner-permissions">10. Automate owner permissions<a href="#10-automate-owner-permissions" class="hash-link" aria-label="Direct link to 10. Automate owner permissions" title="Direct link to 10. Automate owner permissions" translate="no">​</a></h2>
 <p>The <strong>Owner Permissions</strong> page is the recommended permission automation workflow for new
 deployments. It creates one shared RO group and one shared RW group per NetBox instance and uses
-generic constraints such as <code>{&quot;owner__users&quot;: &quot;$user&quot;}</code>. NetBox replaces <code>&quot;$user&quot;</code> with the
-authenticated NetBox user&#x27;s ID, so the same Object Permissions serve every Owner on the instance.</p>
-<p>Create Owners and their user assignments in NetBox, assign Owners to resources, then use the page
+generic constraints such as <code>{&quot;owner__user_groups__user&quot;: &quot;$user&quot;}</code>. NetBox replaces <code>&quot;$user&quot;</code>
+with the authenticated NetBox user&#x27;s ID, so the same Object Permissions serve every Owner on the
+instance.</p>
+<p>Create Owners and assign NetBox user groups to them, assign Owners to resources, then use the page
 to manage templates, reconcile the shared groups, preview and apply fleet-wide updates, and safely
 decommission the managed groups. NetBox Manager does not manage Owner membership, OIDC mappings,
 or NetBox group membership. See <a class="" href="/netbox-manager/docs/owner-permissions">Owner Permission Automation</a> for template
