@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: npm
@@ -70,7 +70,7 @@ jobs:
             docs:
               - 'docs/**'
               - 'docs/website/**'
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         if: steps.changes.outputs.docs == 'true'
         with:
           node-version: 22

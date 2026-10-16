@@ -23,7 +23,7 @@ jobs:
           python -m pip install --require-hashes -r backend/requirements.lock
           python -m pip install pip-audit
           python -m pip_audit
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
