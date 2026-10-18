@@ -1,0 +1,58 @@
+name: Scan container image
+description: Scan an image with both Grype and Trivy and optionally enforce the high/critical policy.
+
+inputs:
+  image:
+    description: Image reference to scan.
+    required: true
+  output-prefix:
+    description: Prefix for the two JSON result files.
+    default: scan
+  fail-on-severity:
+    description: Fail when either scanner reports a high or critical vulnerability.
+    default: "true"
+
+outputs:
+  grype-json:
+    value: ${{ steps.paths.outputs.grype }}
+  trivy-json:
+    value: ${{ steps.paths.outputs.trivy }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Grype and Trivy
+      shell: bash
+      run: |
+        set -euo pipefail
+        install_dir="${RUNNER_TEMP}/security-scanners/bin"
+        mkdir -p "$install_dir"
+        curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b "$install_dir"
+        curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b "$install_dir"
+        echo "$install_dir" >> "$GITHUB_PATH"
+    - id: paths
+      name: Set result paths
+      shell: bash
+      env:
+        PREFIX: ${{ inputs.output-prefix }}
+      run: |
+        echo "grype=${PREFIX}-grype.json" >> "$GITHUB_OUTPUT"
+        echo "trivy=${PREFIX}-trivy.json" >> "$GITHUB_OUTPUT"
+    - name: Scan with Grype
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        OUTPUT: ${{ steps.paths.outputs.grype }}
+      run: grype "$IMAGE" --output json --file "$OUTPUT" || test -s "$OUTPUT"
+    - name: Scan with Trivy
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        OUTPUT: ${{ steps.paths.outputs.trivy }}
+      run: trivy image --format json --output "$OUTPUT" --no-progress "$IMAGE" || test -s "$OUTPUT"
+    - name: Enforce vulnerability policy
+      if: inputs.fail-on-severity == 'true'
+      shell: bash
+      run: >-
+        python "${GITHUB_WORKSPACE}/scripts/security_report.py" check
+        "${{ steps.paths.outputs.grype }}" "${{ steps.paths.outputs.trivy }}"

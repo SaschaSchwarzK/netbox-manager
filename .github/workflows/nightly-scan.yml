@@ -1,0 +1,65 @@
+name: Nightly container scan
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: read
+  pull-requests: write
+
+concurrency:
+  group: nightly-container-scan
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      vulnerable: ${{ steps.policy.outcome == 'failure' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull latest released image
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          image="ghcr.io/${REPOSITORY,,}:latest"
+          docker pull "$image"
+          echo "ref=$image" >> "$GITHUB_OUTPUT"
+      - name: Scan latest image with Grype and Trivy
+        uses: ./.github/actions/scan-image
+        with:
+          image: ${{ steps.image.outputs.ref }}
+          output-prefix: nightly
+          fail-on-severity: "false"
+      - name: Check critical/high policy
+        id: policy
+        continue-on-error: true
+        run: python scripts/security_report.py check nightly-grype.json nightly-trivy.json
+      - name: Upload scanner results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: nightly-scanner-results
+          path: nightly-*.json
+          if-no-files-found: error
+          retention-days: 14
+
+  autopatch:
+    needs: scan
+    if: needs.scan.outputs.vulnerable == 'true'
+    uses: ./.github/workflows/autopatch.yml
+    secrets: inherit
+

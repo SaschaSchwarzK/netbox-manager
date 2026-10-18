@@ -1,0 +1,104 @@
+name: Autopatch vulnerable image
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: read
+  pull-requests: write
+
+concurrency:
+  group: container-autopatch
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull latest released image
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          image="ghcr.io/${REPOSITORY,,}:latest"
+          docker pull "$image"
+          echo "ref=$image" >> "$GITHUB_OUTPUT"
+      - name: Scan released image
+        uses: ./.github/actions/scan-image
+        with:
+          image: ${{ steps.image.outputs.ref }}
+          output-prefix: before
+          fail-on-severity: "false"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Refresh Chainguard base-image lock
+        run: scripts/update-baseimage-lock.sh
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+      - name: Update vulnerable backend dependencies
+        run: |
+          python scripts/update_security_dependencies.py before-grype.json before-trivy.json backend/requirements.txt
+          python -m pip install pip-tools
+          (cd backend && pip-compile --upgrade --generate-hashes --output-file=requirements.lock requirements.txt)
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Update vulnerable frontend dependencies
+        working-directory: frontend
+        # npm exits non-zero when an advisory remains even after updating the
+        # lockfile. The rebuilt-image scan below is the authoritative gate.
+        run: npm audit fix --force --package-lock-only --audit-level=high || true
+      - name: Build patched candidate
+        uses: ./.github/actions/build-image
+        with:
+          tags: netbox-manager:autopatch
+          load: "true"
+          cache-scope: autopatch
+      - name: Run smoke tests
+        run: ./scripts/container-smoke-test.sh netbox-manager:autopatch
+      - name: Scan patched candidate
+        uses: ./.github/actions/scan-image
+        with:
+          image: netbox-manager:autopatch
+          output-prefix: after
+          fail-on-severity: "true"
+      - name: Create vulnerability delta
+        run: |
+          python scripts/security_report.py report \
+            --before before-grype.json before-trivy.json \
+            --after after-grype.json after-trivy.json \
+            --image netbox-manager:autopatch \
+            --output /tmp/autopatch-report.md
+          cat /tmp/autopatch-report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Open or update autopatch pull request
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: main
+          branch: automation/container-autopatch
+          delete-branch: true
+          commit-message: "fix: patch container vulnerabilities"
+          title: "fix: patch container vulnerabilities"
+          body-path: /tmp/autopatch-report.md
+          labels: security,automated
+
