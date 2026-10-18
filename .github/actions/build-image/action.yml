@@ -1,0 +1,59 @@
+name: Build container image
+description: Build the NetBox Manager image with the repository's shared Buildx settings.
+
+inputs:
+  tags:
+    description: Newline-separated image tags.
+    required: true
+  load:
+    description: Load the single-platform image into Docker.
+    default: "true"
+  push:
+    description: Push the image to its registry.
+    default: "false"
+  platforms:
+    description: Comma-separated target platforms.
+    default: linux/amd64
+  cache-scope:
+    description: GitHub Actions cache scope.
+    default: container
+  pull:
+    description: Always check base-image tags for newer content.
+    default: "true"
+  labels:
+    description: Newline-separated OCI labels.
+    default: ""
+  provenance:
+    description: Build provenance setting passed to BuildKit.
+    default: "false"
+  sbom:
+    description: Generate an SBOM attestation.
+    default: "false"
+
+outputs:
+  digest:
+    description: Digest of the pushed image.
+    value: ${{ steps.build.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v4
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+    - name: Build image
+      id: build
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        pull: ${{ inputs.pull }}
+        load: ${{ inputs.load }}
+        push: ${{ inputs.push }}
+        platforms: ${{ inputs.platforms }}
+        tags: ${{ inputs.tags }}
+        labels: ${{ inputs.labels }}
+        cache-from: type=gha,scope=${{ inputs.cache-scope }}
+        cache-to: type=gha,mode=max,scope=${{ inputs.cache-scope }}
+        provenance: ${{ inputs.provenance }}
+        sbom: ${{ inputs.sbom }}

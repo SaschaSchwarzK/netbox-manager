@@ -14,8 +14,9 @@ on:
         type: boolean
 
 permissions:
-  contents: read
+  contents: write
   packages: write
+  pull-requests: write
 
 concurrency:
   group: release-${{ inputs.version }}
@@ -56,33 +57,23 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
       - name: Build test image
-        uses: docker/build-push-action@v7
+        uses: ./.github/actions/build-image
         with:
-          context: .
+          tags: netbox-manager:release-test
           load: true
           platforms: linux/amd64
-          tags: netbox-manager:release-test
-          cache-from: type=gha,scope=release
-          cache-to: type=gha,mode=max,scope=release
+          cache-scope: release
 
       - name: Run container smoke tests
         run: ./scripts/container-smoke-test.sh netbox-manager:release-test
 
-      - name: Scan container image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      - name: Scan container image with Grype and Trivy
+        uses: ./.github/actions/scan-image
         with:
-          image-ref: netbox-manager:release-test
-          format: table
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: 1
+          image: netbox-manager:release-test
+          output-prefix: release-candidate
+          fail-on-severity: "true"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
@@ -92,20 +83,60 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and publish multi-platform image
-        uses: docker/build-push-action@v7
+        uses: ./.github/actions/build-image
         with:
-          context: .
           push: true
+          load: false
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.image.outputs.tags }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ inputs.version }}
-          cache-from: type=gha,scope=release
-          cache-to: type=gha,mode=max,scope=release
+          cache-scope: release
           provenance: mode=max
           sbom: true
+
+      - name: Pull the published image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          VERSION: ${{ inputs.version }}
+        run: docker pull "$IMAGE:$VERSION"
+
+      - name: Scan the published image
+        uses: ./.github/actions/scan-image
+        with:
+          image: ${{ steps.image.outputs.name }}:${{ inputs.version }}
+          output-prefix: published
+          fail-on-severity: "false"
+
+      - name: Generate released-image report
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          printf '{"matches":[]}' > empty-grype.json
+          printf '{"Results":[]}' > empty-trivy.json
+          python scripts/security_report.py report \
+            --before empty-grype.json empty-trivy.json \
+            --after published-grype.json published-trivy.json \
+            --image "$IMAGE:$VERSION" \
+            --output released-image-report.md || true
+          python scripts/update_readme_cves.py README.md released-image-report.md "$IMAGE:$VERSION" "$VERSION"
+
+      - name: Open or update README vulnerability PR
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: main
+          branch: automation/released-image-cves
+          delete-branch: true
+          commit-message: "docs: update released image vulnerabilities"
+          title: "docs: update released image vulnerabilities for ${{ inputs.version }}"
+          body: |
+            Updates the README with the Grype and Trivy results for
+            `${{ steps.image.outputs.name }}:${{ inputs.version }}` after publication.
+          labels: security,automated,documentation
 
       - name: Summarize release
         env:

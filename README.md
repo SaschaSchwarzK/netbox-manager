@@ -94,6 +94,16 @@ The export volume is required by **Data Export** and must be writable by contain
 using a bind mount. Size it for the largest expected exports multiplied by the number retained
 during the configured retention period.
 
+## Released images and current vulnerabilities
+
+This table is updated from Grype and Trivy results after each container release. Findings reported
+by both scanners are de-duplicated by vulnerability, package, and installed version.
+
+<!-- released-images:start -->
+| Release | Image | Critical | High | Medium | Low | Current vulnerabilities |
+|---|---|---:|---:|---:|---:|---|
+<!-- released-images:end -->
+
 To update later, pull `latest` again and recreate the container while keeping all named volumes.
 The `run-docker.sh` helper uses `./.env` by default; set `ENV_FILE` explicitly to use another
 environment file.
