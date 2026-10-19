@@ -3,7 +3,7 @@
 ARG CADDY_VERSION=v2.11.7
 ARG XCADDY_VERSION=v0.4.5
 
-FROM cgr.dev/chainguard/go:latest-dev@sha256:028406b3871c3eb4825a9815cb0d75e608283cc29986eb20901d5981758f0127 AS caddy-builder
+FROM cgr.dev/chainguard/go:latest-dev@sha256:8c5e682389f30e2f4152cc7404123f48a6b6808f98ac2c2519ef028c269cd7e4 AS caddy-builder
 ARG CADDY_VERSION
 ARG XCADDY_VERSION
 COPY security/go-fixes.txt /build/security/go-fixes.txt
@@ -35,7 +35,7 @@ replacements="$(awk '
 CGO_ENABLED=0 /root/go/bin/xcaddy build "${CADDY_VERSION}" $replacements --output /out/caddy
 EOF
 
-FROM cgr.dev/chainguard/python:latest-dev@sha256:7e19f3a10fe87a502e9e1bc39e3fb917281cd72dabec34d70bacbe2d7d6dd63b AS app-builder
+FROM cgr.dev/chainguard/python:latest-dev@sha256:905b31747ebcae4242e0b71fcd2640c712b79a96f929811d3202b9716b66592a AS app-builder
 USER root
 RUN apk add --no-cache nodejs npm
 
@@ -65,7 +65,7 @@ COPY deploy/serve.py /app/serve.py
 COPY Caddyfile /app/Caddyfile
 RUN mkdir -p /app/data /app/certs /app/exports && chown -R 65532:65532 /app
 
-FROM cgr.dev/chainguard/python:latest@sha256:e23e5598a0770ec4a9bbc5dbd9f157f097b4825c4508914e36acd33454484535 AS runner
+FROM cgr.dev/chainguard/python:latest@sha256:26a608c1549ee52eeb717bf66bce5e60cebaa4a0cd2a57774dfd49484bd38c9a AS runner
 WORKDIR /app
 
 ENV PATH="/app/venv/bin:$PATH" \
