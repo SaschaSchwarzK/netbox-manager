@@ -3,7 +3,7 @@ starlette==1.7.0
 uvicorn==0.54.0
 sqlalchemy==2.1.4
 pydantic==2.14.1
-pydantic-settings==2.15.0
+pydantic-settings>=2.14.2
 cryptography==50.0.2
 httpx==0.28.1
 pynetbox==7.9.0
@@ -14,5 +14,6 @@ APScheduler==3.11.3
 Authlib==1.8.0
 itsdangerous==2.2.0
 alembic==1.20.0
-requests==2.34.2
+requests>=2.33.0
 openpyxl==3.1.5
+certifi>=2026.10.19
