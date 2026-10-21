@@ -3,8 +3,8 @@
   "Trivy": {
     "Version": "0.76.0"
   },
-  "ReportID": "01a15cff-206b-700d-85e8-98fb58be7ce4",
-  "CreatedAt": "2026-10-21T05:46:26.283005713Z",
+  "ReportID": "01a15d69-0c36-72aa-bc36-da6ebefcf46c",
+  "CreatedAt": "2026-10-21T07:42:07.926175963Z",
   "ArtifactID": "sha256:3347e7216e70359574118db1cb82ad6a790ea65d08a3c8a6065a7131c9793e90",
   "ArtifactName": "netbox-manager:autopatch",
   "ArtifactType": "container_image",
