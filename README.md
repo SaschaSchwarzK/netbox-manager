@@ -102,7 +102,6 @@ by both scanners are de-duplicated by vulnerability, package, and installed vers
 <!-- released-images:start -->
 | Release | Image | Critical | High | Medium | Low | Current vulnerabilities |
 |---|---|---:|---:|---:|---:|---|
-| 0.3.1 | `ghcr.io/saschaschwarzk/netbox-manager:0.3.1` | 0 | 0 | 0 | 0 | [GO-2026-5932](https://github.com/advisories/GO-2026-5932) |
 <!-- released-images:end -->
 
 To update later, pull `latest` again and recreate the container while keeping all named volumes.
