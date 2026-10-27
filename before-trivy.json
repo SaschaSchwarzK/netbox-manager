@@ -3,8 +3,8 @@
   "Trivy": {
     "Version": "0.76.1"
   },
-  "ReportID": "01a1772f-d372-797e-ac90-96897f3b7dec",
-  "CreatedAt": "2026-10-26T07:49:45.458623923Z",
+  "ReportID": "01a17c5a-03bf-7f25-a975-78ab4445b6b2",
+  "CreatedAt": "2026-10-27T07:53:56.415993779Z",
   "ArtifactID": "sha256:28539481623d099ff0146ae9b8b97f9c23302d1f2e7c765b9cd388cf4b4e1445",
   "ArtifactName": "ghcr.io/saschaschwarzk/netbox-manager:latest",
   "ArtifactType": "container_image",
@@ -3140,6 +3140,7 @@
           "VendorSeverity": {
             "amazon": 3,
             "bitnami": 4,
+            "oracle-oval": 3,
             "redhat": 3,
             "ubuntu": 2
           },
@@ -3158,6 +3159,7 @@
             "http://www.openwall.com/lists/oss-security/2026/10/24/6",
             "http://www.openwall.com/lists/oss-security/2026/10/26/12",
             "http://www.openwall.com/lists/oss-security/2026/10/26/13",
+            "http://www.openwall.com/lists/oss-security/2026/10/26/16",
             "https://access.redhat.com/security/cve/CVE-2026-111497",
             "https://advisory.echohq.com/cve/CVE-2026-111497",
             "https://broccoli2shell.com",
@@ -3166,14 +3168,18 @@
             "https://github.com/google/brotli/releases/tag/v1.0.10",
             "https://github.com/google/brotli/releases/tag/v1.1.1",
             "https://github.com/google/brotli/releases/tag/v1.2.1",
+            "https://linux.oracle.com/cve/CVE-2026-111497.html",
+            "https://linux.oracle.com/errata/ELSA-2026-500514.html",
             "https://lists.debian.org/debian-lts-announce/2026/10/msg00049.html",
             "https://nodejs.org/en/blog/vulnerability/october-2026-security-releases#nodejs-brotli-decoder-out-of-bounds-write-permits-remote-code-execution-cve-2026-111497---high",
             "https://nvd.nist.gov/vuln/detail/CVE-2026-111497",
+            "https://patchtheplanet.org/brotli",
+            "https://ubuntu.com/security/notices/USN-8956-1",
             "https://www.aikido.dev/blog/node2shell-nodejs-brotli-rce-cve-2026-111497",
             "https://www.cve.org/CVERecord?id=CVE-2026-111497"
           ],
           "PublishedDate": "2026-10-22T14:17:37.19Z",
-          "LastModifiedDate": "2026-10-26T05:17:53.007Z"
+          "LastModifiedDate": "2026-10-26T18:17:36.103Z"
         },
         {
           "VulnerabilityID": "CVE-2026-111497",
@@ -3206,6 +3212,7 @@
           "VendorSeverity": {
             "amazon": 3,
             "bitnami": 4,
+            "oracle-oval": 3,
             "redhat": 3,
             "ubuntu": 2
           },
@@ -3224,6 +3231,7 @@
             "http://www.openwall.com/lists/oss-security/2026/10/24/6",
             "http://www.openwall.com/lists/oss-security/2026/10/26/12",
             "http://www.openwall.com/lists/oss-security/2026/10/26/13",
+            "http://www.openwall.com/lists/oss-security/2026/10/26/16",
             "https://access.redhat.com/security/cve/CVE-2026-111497",
             "https://advisory.echohq.com/cve/CVE-2026-111497",
             "https://broccoli2shell.com",
@@ -3232,14 +3240,18 @@
             "https://github.com/google/brotli/releases/tag/v1.0.10",
             "https://github.com/google/brotli/releases/tag/v1.1.1",
             "https://github.com/google/brotli/releases/tag/v1.2.1",
+            "https://linux.oracle.com/cve/CVE-2026-111497.html",
+            "https://linux.oracle.com/errata/ELSA-2026-500514.html",
             "https://lists.debian.org/debian-lts-announce/2026/10/msg00049.html",
             "https://nodejs.org/en/blog/vulnerability/october-2026-security-releases#nodejs-brotli-decoder-out-of-bounds-write-permits-remote-code-execution-cve-2026-111497---high",
             "https://nvd.nist.gov/vuln/detail/CVE-2026-111497",
+            "https://patchtheplanet.org/brotli",
+            "https://ubuntu.com/security/notices/USN-8956-1",
             "https://www.aikido.dev/blog/node2shell-nodejs-brotli-rce-cve-2026-111497",
             "https://www.cve.org/CVERecord?id=CVE-2026-111497"
           ],
           "PublishedDate": "2026-10-22T14:17:37.19Z",
-          "LastModifiedDate": "2026-10-26T05:17:53.007Z"
+          "LastModifiedDate": "2026-10-26T18:17:36.103Z"
         },
         {
           "VulnerabilityID": "CVE-2026-111497",
@@ -3272,6 +3284,7 @@
           "VendorSeverity": {
             "amazon": 3,
             "bitnami": 4,
+            "oracle-oval": 3,
             "redhat": 3,
             "ubuntu": 2
           },
@@ -3290,6 +3303,7 @@
             "http://www.openwall.com/lists/oss-security/2026/10/24/6",
             "http://www.openwall.com/lists/oss-security/2026/10/26/12",
             "http://www.openwall.com/lists/oss-security/2026/10/26/13",
+            "http://www.openwall.com/lists/oss-security/2026/10/26/16",
             "https://access.redhat.com/security/cve/CVE-2026-111497",
             "https://advisory.echohq.com/cve/CVE-2026-111497",
             "https://broccoli2shell.com",
@@ -3298,14 +3312,18 @@
             "https://github.com/google/brotli/releases/tag/v1.0.10",
             "https://github.com/google/brotli/releases/tag/v1.1.1",
             "https://github.com/google/brotli/releases/tag/v1.2.1",
+            "https://linux.oracle.com/cve/CVE-2026-111497.html",
+            "https://linux.oracle.com/errata/ELSA-2026-500514.html",
             "https://lists.debian.org/debian-lts-announce/2026/10/msg00049.html",
             "https://nodejs.org/en/blog/vulnerability/october-2026-security-releases#nodejs-brotli-decoder-out-of-bounds-write-permits-remote-code-execution-cve-2026-111497---high",
             "https://nvd.nist.gov/vuln/detail/CVE-2026-111497",
+            "https://patchtheplanet.org/brotli",
+            "https://ubuntu.com/security/notices/USN-8956-1",
             "https://www.aikido.dev/blog/node2shell-nodejs-brotli-rce-cve-2026-111497",
             "https://www.cve.org/CVERecord?id=CVE-2026-111497"
           ],
           "PublishedDate": "2026-10-22T14:17:37.19Z",
-          "LastModifiedDate": "2026-10-26T05:17:53.007Z"
+          "LastModifiedDate": "2026-10-26T18:17:36.103Z"
         }
       ]
     },
